@@ -246,5 +246,92 @@ class HostileInputTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, 2)
 
 
+class ReviewTwoTests(unittest.TestCase):
+    """Second review: no subprocess at all, env refs, missed secrets, name scrub, readable output."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.home = self.root / "home"
+        self.code = self.home / "code"
+        self.code.mkdir(parents=True)
+        self.apps = self.root / "Applications"
+        self.apps.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_scan(self):
+        return scan(home=self.home, apps_dir=self.apps, roots=[self.code])
+
+    def cursor(self, servers):
+        write(self.home / ".cursor/mcp.json", json.dumps({"mcpServers": servers}))
+
+    def test_never_runs_any_program(self):
+        repo = self.code / "r"
+        (repo / ".git").mkdir(parents=True)
+        write(repo / ".env", "OPENAI_API_KEY=x\n")
+        with mock.patch.object(subprocess, "run", side_effect=AssertionError("ran a program")), \
+             mock.patch.object(subprocess, "Popen", side_effect=AssertionError("ran a program")), \
+             mock.patch.object(os, "system", side_effect=AssertionError("ran a program")):
+            r = self.run_scan()
+        self.assertTrue([f for f in r["findings"] if f["rule"] == "no-plaintext-keys-in-git"])
+
+    def test_gitignore_rules_read_without_git(self):
+        repo = self.code / "g"
+        (repo / ".git/info").mkdir(parents=True)
+        write(repo / ".gitignore", "# c\n.env\nsecrets/\n/root.env\n")
+        write(repo / ".env", "OPENAI_API_KEY=x\n")             # ignored
+        write(repo / "secrets/.env", "OPENAI_API_KEY=x\n")     # ignored (dir)
+        write(repo / "root.env", "OPENAI_API_KEY=x\n")         # ignored (anchored)
+        write(repo / "sub/root.env", "OPENAI_API_KEY=x\n")     # NOT ignored (anchor)
+        write(repo / "sub/.gitignore", "!.env\n")
+        write(repo / "sub/.env", "OPENAI_API_KEY=x\n")         # NOT ignored (negated)
+        write(repo / ".git/info/exclude", "local.env\n")
+        write(repo / "local.env", "OPENAI_API_KEY=x\n")        # ignored (info/exclude)
+        hit = sorted(Path(f["where"]).relative_to(repo).as_posix() for f in self.run_scan()["findings"]
+                     if f["rule"] == "no-plaintext-keys-in-git")
+        self.assertEqual(hit, ["sub/.env", "sub/root.env"])
+
+    def test_env_references_are_not_secrets(self):
+        self.cursor({"a": {"url": "https://h", "headers": {"Authorization": "Bearer ${X}"}},
+                     "b": {"command": "npx", "env": {"OPENAI_API_KEY": "$OPENAI"}}})
+        self.assertFalse([f for f in self.run_scan()["findings"] if f["rule"] == "no-secrets-in-mcp-config"])
+
+    def test_more_secret_shapes_are_flagged_without_leaking(self):
+        tok = "Zx9kQ2mL7pR4tY8wB3nV6cF1"
+        self.cursor({"c1": {"command": f"OPENAI_API_KEY={tok} npx"},
+                     "c2": {"url": f"https://h/p?k={tok}"},
+                     "c3": {"url": f"https://h/p#token={tok}"},
+                     "c4": {"command": "npx", "args": ["srv", f"--header=Authorization:Bearer {tok}"]},
+                     "c5": {"command": "npx", "args": ["srv", tok]},
+                     "c6": {"command": "npx", "env": {"OPENAI_API_KEY": [tok]}}})
+        r = self.run_scan()
+        self.assertNotIn(tok, json.dumps(r))
+        flagged = sorted(f["subject"] for f in r["findings"] if f["rule"] == "no-secrets-in-mcp-config")
+        self.assertEqual(flagged, ["c1", "c2", "c3", "c4", "c5", "c6"])
+
+    def test_secret_looking_names_are_scrubbed(self):
+        self.cursor({"sk-NAMELEAK505abcdefghijkl": {"command": "sk-CMDISSECRET999abcdefgh",
+                                                     "env": {"OPENAI_API_KEY_sk-KEYNAME606abcdefghij": "${X}"}}})
+        out = json.dumps(self.run_scan())
+        for leak in ("NAMELEAK505", "CMDISSECRET999", "KEYNAME606"):
+            self.assertNotIn(leak, out)
+
+    def test_terminal_output_summary_grouping_and_where(self):
+        for name in ("p1", "p2", "p3"):
+            write(self.code / name / "requirements.txt", "mcp\n")
+        self.cursor({"fire": {"command": "npx", "env": {"FIRECRAWL_API_KEY": "literal"}}})
+        out = io.StringIO()
+        with redirect_stdout(out):
+            main(["--home", str(self.home), "--apps", str(self.apps), str(self.code)])
+        text = out.getvalue()
+        first = text.splitlines()[0]
+        self.assertIn("1 problem", first)
+        self.assertEqual(text.count("  - mcp "), 1)
+        self.assertIn("3 projects", text)
+        self.assertIn(".cursor/mcp.json", text.split("Rule findings")[1])
+
+
 if __name__ == "__main__":
     unittest.main()

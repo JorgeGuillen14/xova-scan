@@ -1,7 +1,6 @@
 import argparse
 import json
 import sys
-from collections import Counter
 from pathlib import Path
 
 from . import scan, validate_rules, __version__
@@ -9,22 +8,35 @@ from . import scan, validate_rules, __version__
 LABELS = {"mcp_server": "MCP servers", "ai_app": "AI apps", "ai_library": "AI libraries in code", "api_key": "AI keys (names only)"}
 
 
+def _plural(n, word):
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
 def _print(report):
-    found = report["found"]
-    counts = Counter(f["kind"] for f in found)
-    print(f"xova-scan {report['version']}: found {len(found)} AI items on this machine\n")
+    found, findings = report["found"], report["findings"]
+    print(f"xova-scan {report['version']}: {_plural(len(found), 'AI item')} on this machine, "
+          f"{_plural(len(findings), 'problem')}\n")
     for kind, label in LABELS.items():
         items = [f for f in found if f["kind"] == kind]
         if not items:
             continue
-        print(f"{label} ({counts[kind]})")
-        for f in items:
-            print(f"  - {f['name']}  [{f['status']}]  {f['where']}")
+        print(f"{label} ({len(items)})")
+        if kind == "ai_library":
+            groups = {}
+            for f in items:
+                groups.setdefault((f["name"], f["status"]), []).append(f["where"])
+            for (name, status), wheres in groups.items():
+                where = wheres[0] if len(wheres) == 1 else _plural(len(wheres), "project")
+                print(f"  - {name}  [{status}]  {where}")
+        else:
+            for f in items:
+                print(f"  - {f['name']}  [{f['status']}]  {f['where']}")
         print()
-    findings = report["findings"]
     print(f"Rule findings ({len(findings)})" if findings else "Rule findings: none")
     for f in findings:
         print(f"  ! {f['rule']}: {f['subject']}  {f['why']}")
+        if f.get("where"):
+            print(f"      in {f['where']}")
     if report["unreadable"]:
         print("\nCould not read (not proof of no AI):")
         for u in report["unreadable"]:

@@ -2,13 +2,14 @@
 
 Runs locally. Never opens a network connection. Never reads, stores or prints a
 secret's value: only the name of the variable or config key that holds it. MCP
-commands and URLs are reduced to the program name or scheme://host.
+commands and URLs are reduced to the program name or scheme://host. Never runs
+another program (not even git): .gitignore files are read as plain text.
 """
 import json
 import os
 import re
+import fnmatch
 import stat
-import subprocess
 import tomllib
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
@@ -43,6 +44,9 @@ AI_KEY_HINT = re.compile(r"OPENAI|ANTHROPIC|CLAUDE|GEMINI|GOOGLE_API|MISTRAL|COH
                          r"HUGGINGFACE|HF_|PERPLEXITY|XAI|DEEPSEEK|AZURE_OPENAI|BEDROCK|OPENROUTER|LANGCHAIN|"
                          r"LANGSMITH|PINECONE|ELEVENLABS|FIREWORKS|VOYAGE")
 SECRET_FLAG = re.compile(r"^--?(api[-_]?key|token|access[-_]?token|secret|password|auth|key|bearer)(=|$)", re.I)
+TOKEN_SHAPE = re.compile(r"(?<![A-Za-z0-9])(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|"
+                         r"xox[abprs]-[A-Za-z0-9-]{8,}|AIza[0-9A-Za-z_-]{8,}|glpat-[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{10,})")
+RANDOM_SHAPE = re.compile(r"^(?=.*[0-9])(?=.*[A-Za-z])[A-Za-z0-9_\-+/=]{20,}$")
 TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist", ".tmpl")
 
 SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "env", "__pycache__", "site-packages", "dist", "build",
@@ -101,6 +105,29 @@ def _servers(data):
             yield from _servers(proj)
 
 
+def _looks_secret(text: str) -> bool:
+    if TOKEN_SHAPE.search(text):
+        return True
+    return bool(RANDOM_SHAPE.match(text)) and "/" not in text.strip("/") and not text.startswith("-")
+
+
+def _safe(name):
+    """Names are printed, so a name that is itself shaped like a token is redacted."""
+    name = str(name)
+    return "[redacted: looks like a secret]" if _looks_secret(name) or any(_looks_secret(p) for p in re.split(r"[_\s:=]", name)) else name
+
+
+def _is_reference(val: str) -> bool:
+    v = val.strip()
+    return "${" in v or "$env:" in v or "{env:" in v or bool(re.fullmatch(r"\$[A-Za-z_][A-Za-z0-9_]*", v))
+
+
+def _literal(val) -> bool:
+    if isinstance(val, list):
+        return any(_literal(v) for v in val)
+    return isinstance(val, str) and bool(val.strip()) and not _is_reference(val)
+
+
 def _keyish(name: str) -> bool:
     return bool(KEYISH.search(name.upper().replace("-", "_")))
 
@@ -113,7 +140,9 @@ def _url_target(url: str):
         port = f":{parts.port}" if parts.port else ""
     except ValueError:
         return "(unparseable url)", False
-    secret = bool(parts.username or parts.password) or any(_keyish(k) for k, _ in parse_qsl(parts.query))
+    pairs = parse_qsl(parts.query) + parse_qsl(parts.path.split(";", 1)[1] if ";" in parts.path else "")
+    secret = bool(parts.username or parts.password or parts.fragment) or \
+        any(_keyish(k) or _looks_secret(v) for k, v in pairs) or any(_looks_secret(seg) for seg in parts.path.split("/"))
     return (f"{parts.scheme}://{host}{port}" if host else "(url)"), secret
 
 
@@ -122,16 +151,20 @@ def _command_target(cmd, args):
     if isinstance(cmd, dict):  # Zed: {"path": ..., "args": [...]}
         args = cmd.get("args", args)
         cmd = cmd.get("path", "")
-    program = ""
+    program, secret = "", False
     if isinstance(cmd, str):
-        tokens = [t for t in cmd.split() if "=" not in t]
+        words = cmd.split()
+        secret = any("=" in w and (_keyish(w.split("=", 1)[0]) or _looks_secret(w.split("=", 1)[1])) for w in words)
+        tokens = [t for t in words if "=" not in t]
         program = Path(tokens[0]).name if tokens else ""
-    secret = False
     if isinstance(args, list):
         strs = [a for a in args if isinstance(a, str)]
         for i, a in enumerate(strs):
             m = SECRET_FLAG.match(a)
             if m and (m.group(2) == "=" or (i + 1 < len(strs) and not strs[i + 1].startswith("-"))):
+                secret = True
+            low = a.lower()
+            if "authorization" in low or "bearer " in low or any(_looks_secret(p) for p in re.split(r"[\s=:]", a) if p):
                 secret = True
     return program or "(unknown command)", secret
 
@@ -162,9 +195,9 @@ def _scan_mcp_file(client, path, rep):
             target, secret = _url_target(cfg["url"])
         else:
             target, secret = _command_target(cfg.get("command"), cfg.get("args"))
-        rep.add("mcp_server", name, where, runs=target)
+        rep.add("mcp_server", _safe(name), where, runs=_safe(target))
         if secret:
-            rep.inline_secrets.add(name)
+            rep.inline_secrets.add(_safe(name))
         for block in ("env", "headers"):
             values = cfg.get(block)
             if not isinstance(values, dict):
@@ -172,9 +205,9 @@ def _scan_mcp_file(client, path, rep):
             for key, val in values.items():
                 if not isinstance(key, str) or not _keyish(key):
                     continue
-                rep.add("api_key", key, f"{client} config for MCP server '{name}'")
-                if isinstance(val, str) and val.strip() and not val.strip().startswith(("${", "$env:", "{env:")):
-                    rep.inline_secrets.add(name)
+                rep.add("api_key", _safe(key), f"{client} config for MCP server '{_safe(name)}' ({path})")
+                if _literal(val):
+                    rep.inline_secrets.add(_safe(name))
 
 
 def _scan_apps(apps_dir: Path, rep):
@@ -233,16 +266,47 @@ def _git_root(start: Path, stop: Path):
     return None
 
 
-def _git_ignored(repo: Path, path: Path) -> bool:
-    """Ask local git whether it ignores the file. Any failure counts as not ignored (we warn rather than hide)."""
+def _patterns(path: Path, base: Path):
     try:
-        res = subprocess.run(
-            ["git", "-c", "core.fsmonitor=false", "-C", str(repo), "check-ignore", "-q", "--", str(path.relative_to(repo))],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
-            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"})
-        return res.returncode == 0
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return False
+        lines = _read(path).splitlines()
+    except _Unreadable:
+        return []
+    out = []
+    for line in lines:
+        line = line.rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        neg = line.startswith("!")
+        pat = line[1:] if neg else line
+        dir_only = pat.endswith("/")
+        pat = pat.rstrip("/")
+        anchored = "/" in pat
+        out.append((base, pat.lstrip("/"), neg, dir_only, anchored))
+    return out
+
+
+def _git_ignored(repo: Path, path: Path) -> bool:
+    """Read .gitignore files and .git/info/exclude as text; last match wins. No program is run.
+    Global excludes are not read, so a doubtful file is reported (a warning), never hidden."""
+    rel_dirs = path.parent.relative_to(repo).parts
+    dirs = [repo.joinpath(*rel_dirs[:i]) for i in range(len(rel_dirs) + 1)]
+    rules = _patterns(repo / ".git/info/exclude", repo)
+    for d in dirs:
+        rules += _patterns(d / ".gitignore", d)
+    ignored = False
+    for base, pat, neg, dir_only, anchored in rules:
+        try:
+            parts = path.relative_to(base).parts
+        except ValueError:
+            continue
+        candidates = parts[:-1] if dir_only else parts
+        if anchored:
+            hit = any(fnmatch.fnmatchcase("/".join(parts[:i]), pat) for i in range(1, len(candidates) + 1))
+        else:
+            hit = any(fnmatch.fnmatchcase(c, pat) for c in candidates)
+        if hit:
+            ignored = not neg
+    return ignored
 
 
 def _is_env_file(name: str) -> bool:
@@ -296,6 +360,7 @@ def _scan_projects(roots, rep, home_sources=frozenset()):
                     repo = _git_root(d, root)
                     exposed = repo is not None and not _git_ignored(repo, p)
                     for key in keys:
+                        key = _safe(key)
                         rep.add("api_key", key, str(p))
                         if exposed:
                             rep.exposed_keys.append((key, str(p)))
@@ -306,8 +371,12 @@ def _check(rep, rules):
     for key, path in rep.exposed_keys:
         findings.append({"rule": "no-plaintext-keys-in-git", "subject": key, "where": path,
                          "why": "An AI key sits in a file that git does not ignore, so it can be committed."})
+    server_where = {}
+    for f in rep.found:
+        if f["kind"] == "mcp_server":
+            server_where.setdefault(f["name"], f["where"])
     for server in sorted(rep.inline_secrets):
-        findings.append({"rule": "no-secrets-in-mcp-config", "subject": server,
+        findings.append({"rule": "no-secrets-in-mcp-config", "subject": server, "where": server_where.get(server, ""),
                          "why": "This MCP server's config holds a secret in plain text (env, header, URL or argument). "
                                 "Use an environment variable reference."})
     approved = {a.lower() for a in rules.get("approved", [])}

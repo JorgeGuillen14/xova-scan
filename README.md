@@ -20,7 +20,7 @@ xova-scan --json > ai-inventory.json
 - `approved-tools-only`: anything not on your list, e.g. `{"approved": ["Claude", "openai", "github"]}`
 
 **Safe by design**
-- Runs only on your machine. It never opens a network connection (tested).
+- Runs only on your machine. It never opens a network connection and never runs another program, not even git (tested).
 - It never reads a secret's value into the report, only the variable name (tested).
 - Everything starts as "Not reviewed". Finding nothing doesn't prove there's no AI.
 
