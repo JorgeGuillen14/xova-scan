@@ -2,7 +2,7 @@
 
 **See every AI tool on your computer, what it can reach, and what it has been doing. One command, nothing leaves your machine.**
 
-AI assistants and agents now run commands, edit files, open browsers and connect to your databases and accounts, often through MCP servers you added once and forgot about. Normal security tools see "Cursor is installed" and stop there. xova-scan answers the questions that matter:
+AI assistants and agents now run commands, edit files, open browsers and connect to your databases and accounts, often through MCP servers you added once and forgot about. xova-scan answers:
 
 - **What AI is here?** Apps, command-line agents, MCP servers, AI libraries in your code, AI keys.
 - **What can it reach?** Your files, databases, code repositories, web browser, whole desktop, or any command.
@@ -20,7 +20,7 @@ python3 -m pip install git+https://github.com/JorgeGuillen14/xova-scan
 python3 -m xova_scan.cli
 ```
 
-That scans your home folder (about a minute on a busy machine). To scan one folder only:
+That scans your home folder. Time depends on how much code and agent history you have: seconds on a small machine, a minute or more with years of agent logs. To scan one folder only:
 
 ```sh
 python3 -m xova_scan.cli ~/code
@@ -32,32 +32,62 @@ Using pipx instead: `pipx run --spec git+https://github.com/JorgeGuillen14/xova-
 
 ## What you'll see
 
+This is the scanner's real output on a demo machine built by [`examples/demo_machine.py`](examples/demo_machine.py) (a small fake home folder with Claude, Cursor, Codex and a few MCP servers; no real person's data). Run `python3 examples/demo_machine.py` to reproduce it exactly. A test keeps this block identical to what the scanner prints.
+
+<!-- demo-output-start -->
 ```
-xova-scan 0.3.0: 64 AI items on this machine, 18 problems
+xova-scan 0.3.0: 9 AI items on this machine, 5 problems
 
 What your AI can reach
   - databases: supabase
+  - files on this machine: filesystem
   - run any command: Codex
   - web browser: playwright
-  - your whole desktop: computer-use
-  ...
 
-What your AI did in the last 30 days (210 agent sessions)
-  - ran 9120 shell commands (most: git 2210, npm 1340, python3 990, ...)
-  - risky commands: delete files (rm -rf) x37, force push x1
-  - changed 412 files (mostly in ~/code/app, ~/code/api)
-  - reached 48 web hosts: github.com, api.openai.com, ...
-  - 6 unique keys or tokens sit in its chat logs
+What your AI did in the last 30 days (1 agent session)
+  - ran 4 shell commands (most: git 2, npm 2, rm 1)
+  - risky commands: delete files (rm -rf) x1, force push x1
+  - changed 2 files (mostly in ~/code/shop)
+  - reached 1 web host: platform.openai.com
+  - used tools through MCP: supabase 1
 
 Fix first
-  1. Codex: This AI agent runs commands and changes files without asking first...
-  2. 6 unique keys or tokens in 9 AI log files: ...
-  3. supabase: This MCP server's config holds a secret in plain text...
+  1. Codex: This AI agent runs commands and changes files without asking first. One bad prompt or poisoned web page can act with your full access. Turn approvals back on.
+  2. supabase: This MCP server's config holds a secret in plain text (env, header, URL or argument). Use an environment variable reference.
+  3. OPENAI_API_KEY: An AI key is stored in plain text inside a git repository. Confirm it can never be committed: git check-ignore -v '/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/shop/.env' must print a rule, and git ls-files must not list it. Better: use a secrets manager.
+
+MCP servers (3)
+  - filesystem  Claude Desktop (/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/Library/Application Support/Claude/claude_desktop_config.json)
+  - playwright  Claude Desktop (/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/Library/Application Support/Claude/claude_desktop_config.json)
+  - supabase  Cursor (/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/.cursor/mcp.json)
+
+AI apps (2)
+  - Claude  /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/Applications/Claude.app
+  - Cursor  /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/Applications/Cursor.app
+
+AI libraries in code (2)
+  - anthropic  /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/api/requirements.txt
+  - openai  /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/shop/package.json
+
+AI keys (names only) (2)
+  - OPENAI_API_KEY  in /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/shop/.env
+  - SUPABASE_ACCESS_TOKEN  in Cursor config for MCP server 'supabase' (/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/.cursor/mcp.json)
+
+All rule findings (5)
+  ! agent-runs-without-asking: Codex  This AI agent runs commands and changes files without asking first. One bad prompt or poisoned web page can act with your full access. Turn approvals back on.
+      in ~/.codex/config.toml
+  ! no-secrets-in-mcp-config: supabase  This MCP server's config holds a secret in plain text (env, header, URL or argument). Use an environment variable reference.
+      in Cursor (/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/.cursor/mcp.json)
+  ! plaintext-ai-key-in-repo: OPENAI_API_KEY  An AI key is stored in plain text inside a git repository. Confirm it can never be committed: git check-ignore -v '/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/shop/.env' must print a rule, and git ls-files must not list it. Better: use a secrets manager.
+      in /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/shop/.env
+  ! unpinned-mcp-server (2): playwright, supabase
+      This MCP server downloads its latest code every time it starts. Pin an exact version so new code can't arrive unreviewed.
+
+Local scan only. Nothing left this machine. Secret values were never read into the report. Finding nothing does not prove there is no AI here.
 ```
+<!-- demo-output-end -->
 
-(Illustrative example; your numbers will differ.)
 
-Then the full inventory and every finding, grouped.
 
 ### The sections
 
@@ -138,7 +168,7 @@ Each promise is covered by the test suite (`python3 -m unittest discover -s test
 
 ## For organizations: XOVA
 
-xova-scan shows one machine. **XOVA** keeps an organization's whole AI inventory current across every machine, Microsoft 365, Google Workspace and cloud accounts, checks it against the rules that apply to you (EU AI Act, NIST AI RMF, OMB M-25-21, state AI laws and your own policies), and produces audit-ready evidence. Every determination is deterministic and can be re-run.
+xova-scan shows one machine. **XOVA** is an AI governance platform in development. Today it keeps an organization's AI inventory, assesses each system against a built-in rules library (EU AI Act, NIST AI RMF and its Generative AI profile, OMB M-25-21 and M-25-22, Texas TRAIGA, Colorado's AI law, NYC Local Law 144), and records every change in an audit trail. Its determinations come from rules code, not AI. Connections to Microsoft 365, Google Workspace and cloud AI services are planned, not yet available.
 
 Send a scan to XOVA:
 
@@ -154,10 +184,10 @@ This writes XOVA inventory import files (25 systems per file). Everything arrive
 
 **Does it need admin rights?** No. It reads your own files only.
 
-**Will it slow my computer?** It reads files for about a minute, then stops. Nothing keeps running.
+**Will it slow my computer?** It reads files once, then stops. Nothing keeps running.
 
-**Is my data shared with XOVA?** No. Nothing is sent anywhere. The export writes local files you choose to share.
+**Is my data shared with XOVA?** No. Nothing is sent anywhere. The export only writes files on your machine; sharing them is your choice.
 
-**Why does "Could not read" appear?** Some folders are protected by your system. The scan lists them so you know they weren't checked.
+**Why does "Could not read" appear?** Some folders can't be read with your account's permissions. The scan lists them so you know they weren't checked.
 
 License: Apache-2.0.

@@ -178,7 +178,12 @@ def _servers(data):
 SHORT_RANDOM = re.compile(r"^(?=.*[0-9])(?=.*[A-Za-z])[A-Za-z0-9]{12,}$")
 
 
+UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
 def _looks_secret(text: str) -> bool:
+    if UUID.fullmatch(text) or UUID.fullmatch(text.split(".")[0]):
+        return False  # standard random IDs (log file names, session IDs) are identifiers, not secrets
     if TOKEN_SHAPE.search(text):
         return True
     if RANDOM_SHAPE.match(text) and "/" not in text.strip("/") and not text.startswith("-"):
@@ -192,6 +197,13 @@ def _safe(name):
     name = str(name)
     pieces = re.split(r"[_\s:=]", name) + re.findall(r"[A-Za-z0-9_\-+/=]{12,}", name)
     return "[redacted: looks like a secret]" if _looks_secret(name) or any(_looks_secret(p) for p in pieces) else name
+
+
+def _safe_path(path) -> str:
+    """Locations are printed, so any folder or file name shaped like a key is redacted."""
+    text = str(path)
+    parts = re.split(r"([/\\])", text)
+    return "".join(p if p in ("/", "\\") or _safe(p) == p else "[redacted]" for p in parts)
 
 
 def _is_reference(val: str) -> bool:
@@ -250,9 +262,11 @@ class _Report:
     def __init__(self):
         self.found, self.unreadable, self.inline_secrets, self.exposed_keys = [], [], set(), []
         self.reach, self.unpinned, self.auto_agents = {}, set(), []
+        self.home = None
         self._seen = set()
 
     def add(self, kind, name, where, **extra):
+        where = _safe_path(where)
         key = (kind, name, where)
         if key in self._seen:
             return
@@ -489,6 +503,17 @@ def _posture(home: Path, rep):
         rep.reach.setdefault("run any command", set()).add(agent)
 
 
+def _shell_path(path: str, home) -> str:
+    """A paste-safe shell path: "$HOME"/'rest' under the home folder (same on every machine), else fully quoted."""
+    if home:
+        try:
+            rel = Path(path).relative_to(home)
+            return '"$HOME"/' + shlex.quote(rel.as_posix())
+        except ValueError:
+            pass
+    return shlex.quote(path)
+
+
 def _check(rep, rules):
     findings = []
     for agent, path in rep.auto_agents:
@@ -500,9 +525,10 @@ def _check(rep, rules):
                          "why": "This MCP server downloads its latest code every time it starts. Pin an exact version "
                                 "so new code can't arrive unreviewed."})
     for key, path in rep.exposed_keys:
+        path = _safe_path(path)
         findings.append({"rule": "plaintext-ai-key-in-repo", "subject": key, "where": path,
                          "why": "An AI key is stored in plain text inside a git repository. Confirm it can never be "
-                                f"committed: git check-ignore -v {shlex.quote(path)} must print a rule, and "
+                                f"committed: git check-ignore -v {_shell_path(path, rep.home)} must print a rule, and "
                                 "git ls-files must not list it. Better: use a secrets manager."})
     server_where = {}
     for f in rep.found:
@@ -542,6 +568,7 @@ def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None, with_acti
     roots = [Path(r) for r in (roots or [home])]
     system = system or os.environ.get("XOVA_SCAN_SYSTEM") or platform.system()  # env pin is for tests
     rep = _Report()
+    rep.home = home
     sources = _home_mcp_sources(home, system)
     for client, path in sources:
         if path.exists():
@@ -558,7 +585,7 @@ def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None, with_acti
                        desktop_logs=claude_desktop_logs(home, system))
     findings = _check(rep, rules)
     if act and act["secrets_in_logs"]:
-        files = act["secret_log_files"]
+        files = act["secret_log_files"] = [_safe_path(f) for f in act["secret_log_files"]]
         findings.insert(0, {"rule": "secret-in-ai-logs", "subject": f"{act['secrets_in_logs']} unique keys or tokens in {len(files)} AI log files",
                             "where": ", ".join(files[:3]) + (f" and {len(files) - 3} more" if len(files) > 3 else ""),
                             "why": "Strings shaped like real keys or tokens (OpenAI/Anthropic sk-, GitHub, Slack, Google, GitLab, AWS, Stripe, "
@@ -569,7 +596,7 @@ def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None, with_acti
     kinds = ["mcp_server", "ai_app", "ai_cli", "ai_library", "api_key", "cloud_account"]
     rep.found.sort(key=lambda f: (kinds.index(f["kind"]) if f["kind"] in kinds else 99, f["name"], f["where"]))
     findings.sort(key=lambda f: (f["rule"], f["subject"], f.get("where", "")))
-    rep.unreadable = sorted(set(rep.unreadable))
+    rep.unreadable = sorted({_safe_path(u) for u in rep.unreadable})
     return {"tool": "xova-scan", "version": __version__, "note": NOTE, "found": rep.found,
             "reach": {k: sorted(v) for k, v in sorted(rep.reach.items())},
             "activity": act, "findings": findings, "unreadable": rep.unreadable, "roots": [str(r) for r in roots]}

@@ -329,3 +329,23 @@ class StatusNoiseTests(unittest.TestCase):
             with redirect_stdout(out):
                 main(args + ["--rules", str(rules)])
             self.assertIn("[Approved]", out.getvalue())
+
+
+class PathRedactionTests(unittest.TestCase):
+    def test_key_shaped_folder_names_are_redacted_in_inventory_locations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            tok = "sk_live_9f8a7b6c5d4e3f2a1b0c"
+            write(home / f"code/{tok}/package.json", json.dumps({"dependencies": {"openai": "1"}}))
+            write(home / f"code/{tok}/.env", "OPENAI_API_KEY=x\n")
+            r = scan(home=home, apps_dir=Path(tmp) / "none", roots=[home / "code"], with_activity=False)
+            self.assertNotIn(tok, json.dumps(r))
+            self.assertTrue([f for f in r["found"] if f["kind"] == "ai_library"])
+
+
+class UuidTests(unittest.TestCase):
+    def test_uuid_file_names_are_not_redacted(self):
+        from xova_scan import _safe_path
+        p = "/h/.claude/projects/-p/45bb8843-5f0f-4180-b320-52ee71136053.jsonl"
+        self.assertEqual(_safe_path(p), p)
+        self.assertIn("[redacted]", _safe_path("/h/sk_live_9f8a7b6c5d4e3f2a1b0c/x"))

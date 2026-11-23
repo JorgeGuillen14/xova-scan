@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -12,9 +13,16 @@ LABELS = {"mcp_server": "MCP servers", "ai_app": "AI apps", "ai_cli": "AI comman
 _CONTROL = {c: f"\\x{c:02x}" for c in [*range(32), 127, *range(128, 160)]}
 
 
-def _c(value):
-    """Terminal view only: control characters from file names are shown escaped, so they can't forge lines."""
-    return str(value).encode("utf-8", "replace").decode("utf-8").translate(_CONTROL)
+_HOME = None
+
+
+def _c(value, home=True):
+    """Terminal view only: paths under the home folder show as ~/..., and control characters from file
+    names are shown escaped, so they can't forge lines."""
+    text = str(value)
+    if home and _HOME:
+        text = text.replace(_HOME + os.sep, "~" + os.sep)
+    return text.encode("utf-8", "replace").decode("utf-8").translate(_CONTROL)
 
 
 def _plural(n, word):
@@ -66,7 +74,7 @@ def _print(report):
         ranked = sorted(findings, key=lambda f: SEVERITY.index(f["rule"]) if f["rule"] in SEVERITY else 99)
         print("Fix first")
         for i, f in enumerate(ranked[:3], 1):
-            print(f"  {i}. {_c(f['subject'])}: {_c(f['why'])}")
+            print(f"  {i}. {_c(f['subject'])}: {_c(f['why'], home=False)}")
         print()
 
     for kind, label in LABELS.items():
@@ -98,7 +106,7 @@ def _print(report):
     for rule, group in by_rule.items():
         if len(group) == 1:
             f = group[0]
-            print(f"  ! {rule}: {_c(f['subject'])}  {_c(f['why'])}")
+            print(f"  ! {rule}: {_c(f['subject'])}  {_c(f['why'], home=False)}")
             if f.get("where"):
                 print(f"      in {_c(f['where'])}")
             continue
@@ -107,7 +115,7 @@ def _print(report):
         if rule == "plaintext-ai-key-in-repo":
             why = "AI keys are stored in plain text inside git repositories. For each file, git check-ignore -v <file> must print a rule and git ls-files must not list it."
         print(f"  ! {rule} ({len(group)}): {subjects}")
-        print(f"      {_c(why)}")
+        print(f"      {_c(why, home=False)}")
         for f in group:
             if f.get("where"):
                 print(f"      - {_c(f['subject'])}: {_c(f['where'])}")
@@ -160,6 +168,8 @@ def main(argv=None):
     if a.json:
         print(json.dumps(report, indent=2))
     else:
+        global _HOME
+        _HOME = str(Path(a.home))
         _print(report)
     return 0
 
