@@ -410,3 +410,18 @@ class ReviewFiveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoiseTests(unittest.TestCase):
+    def test_editor_extension_bundles_and_mac_media_libraries_are_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            write(home / ".cursor/extensions/x-1.0/.mcp.json", json.dumps({"mcpServers": {"bundled": {"command": "npx"}}}))
+            write(home / ".vscode/extensions/y-1.0/package.json", json.dumps({"dependencies": {"openai": "1"}}))
+            write(home / "Pictures/Photos Library.photoslibrary/x/package.json", json.dumps({"dependencies": {"openai": "1"}}))
+            write(home / "code/real/package.json", json.dumps({"dependencies": {"openai": "1"}}))
+            r = scan(home=home, apps_dir=Path(tmp) / "none", roots=[home], with_activity=False)
+            self.assertEqual([f["name"] for f in r["found"] if f["kind"] == "mcp_server"], [])
+            libs = [f["where"] for f in r["found"] if f["kind"] == "ai_library"]
+            self.assertEqual(len(libs), 1)
+            self.assertIn("code/real", libs[0])

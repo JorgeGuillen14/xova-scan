@@ -55,6 +55,8 @@ TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist", ".tmpl")
 SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "env", "__pycache__", "site-packages", "dist", "build",
              ".next", ".cache", "Library", ".Trash", "Applications", ".npm", ".cargo", ".rustup", "Pods"}
 HIDDEN_ALLOWED = {".vscode", ".cursor", ".config"}
+MEDIA_SUFFIXES = (".photoslibrary", ".musiclibrary", ".tvlibrary", ".photoboothlibrary", ".imovielibrary", ".fcpbundle")
+MEDIA_TOP = {"Movies", "Music", "Pictures"}  # macOS media folders: protected, never hold code
 PROJECT_MCP = {(".mcp.json",): "Claude Code (project)", (".vscode", "mcp.json"): "VS Code (project)",
                (".cursor", "mcp.json"): "Cursor (project)"}
 
@@ -406,7 +408,7 @@ def _is_env_file(name: str) -> bool:
     return name == ".env" or name.startswith(".env.") or name.endswith(".env")
 
 
-def _scan_projects(roots, rep, home_sources=frozenset()):
+def _scan_projects(roots, rep, home_sources=frozenset(), home_dir=None):
     seen_libs = set()
     for root in roots:
         if not root.is_dir():
@@ -414,7 +416,11 @@ def _scan_projects(roots, rep, home_sources=frozenset()):
         root_depth = len(root.parts)
         for dirpath, dirnames, filenames in os.walk(root, onerror=lambda e: rep.unreadable.append(str(e.filename))):
             d = Path(dirpath)
-            dirnames[:] = sorted(n for n in dirnames if n not in SKIP_DIRS and (not n.startswith(".") or n in HIDDEN_ALLOWED))
+            dirnames[:] = sorted(n for n in dirnames if n not in SKIP_DIRS
+                                 and (not n.startswith(".") or n in HIDDEN_ALLOWED)
+                                 and not (n == "extensions" and d.name.startswith("."))  # editor extension bundles
+                                 and not n.lower().endswith(MEDIA_SUFFIXES)
+                                 and not (d == home_dir and n in MEDIA_TOP))
             filenames = sorted(filenames)
             if len(d.parts) - root_depth >= MAX_DEPTH:
                 dirnames[:] = []
@@ -543,7 +549,7 @@ def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None, with_acti
     _scan_apps(Path(apps_dir), rep, home, system)
     _scan_clis(rep)
     _scan_cloud(home, rep)
-    _scan_projects(roots, rep, {p for _, p in sources})
+    _scan_projects(roots, rep, {p for _, p in sources}, home)
     _posture(home, rep)
     act = None
     if with_activity:
