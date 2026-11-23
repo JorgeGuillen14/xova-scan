@@ -36,7 +36,7 @@ This is the scanner's real output on a demo machine built by [`examples/demo_mac
 
 <!-- demo-output-start -->
 ```
-xova-scan 0.3.0: 9 AI items on this machine, 5 problems
+xova-scan 0.4.0: 9 AI items on this machine, 5 problems
 
 What your AI can reach
   - databases: supabase
@@ -141,7 +141,7 @@ python3 -m xova_scan.cli --days 90        # read 90 days of agent activity
 python3 -m xova_scan.cli --no-activity    # skip agent logs entirely (faster)
 ```
 
-**4. Scan a whole team's machines.** Each person runs it and shares the `--json` file (or the XOVA export below). Look for the same findings across machines: that's where a team policy is missing.
+**4. Scan a whole team's machines.** Each person runs it and shares the `--json` file (or the XOVA export below). Look for the same findings across machines: that's where a team policy is missing. To bring every machine into XOVA as one list, see `merge` below.
 
 **5. Fix in order.** Do "Fix first" top to bottom. The first item is usually the one that would hurt most.
 
@@ -177,6 +177,14 @@ python3 -m xova_scan.cli --export-xova ./xova-import --team <your XOVA departmen
 ```
 
 This writes XOVA inventory import files (25 systems per file). Everything arrives as Detected and Not reviewed. Nothing is approved and no owner is guessed.
+
+Send a whole team: each person runs the export above and shares their folder. Then one person combines them:
+
+```sh
+python3 -m xova_scan.cli merge --out ./team-import ./alice-export ./bob-export
+```
+
+Each AI system becomes one entry that says how many machines it was found on (counted by machine name), not one entry per machine. If the same AI system is listed under different departments, `merge` stops and asks for `--team`. It never picks one for you. Pass `--team` to put every entry under one department. Run `merge` again later with new exports: the entries keep the same IDs, so XOVA updates them instead of adding duplicates. Use either single-machine exports or `merge` for an organization, not both, or the same system shows up twice.
 
 ---
 

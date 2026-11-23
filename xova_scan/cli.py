@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -126,7 +127,87 @@ def _print(report):
     print(f"\n{report['note']}")
 
 
+MAX_MERGE_FILES = 2000
+MAX_MERGE_BYTES = 1024 * 1024
+MAX_MERGE_TOTAL = 64 * 1024 * 1024
+
+
+def _merge_main(argv):
+    from .merge import merge
+    p = argparse.ArgumentParser(prog="xova-scan merge",
+                                description="Combine many machines' --export-xova folders into one team import.")
+    p.add_argument("inputs", nargs="+", help="export folders (xova-import-*.json inside) or files, one set per machine")
+    p.add_argument("--out", required=True, help="new folder for the team import files")
+    p.add_argument("--team", help="XOVA department ID for every entry (required when machines name different ones)")
+    a = p.parse_args(argv)
+    if not a.out.strip():
+        print("xova-scan: --out must name a folder", file=sys.stderr)
+        return sys.exit(2)
+    out = Path(a.out)
+    try:
+        taken = out.exists() and any(out.glob("xova-import-*.json"))
+    except OSError as exc:
+        print(f"xova-scan: cannot use {_c(str(out))}: {_c(exc.strerror or str(exc), home=False)}", file=sys.stderr)
+        return sys.exit(2)
+    if taken:
+        print(f"xova-scan: {_c(str(out))} already has import files; pick a new --out folder", file=sys.stderr)
+        return sys.exit(2)
+    sets, count, total_bytes = [], 0, 0
+    for item in a.inputs:
+        path = Path(item)
+        try:
+            files = sorted(path.glob("xova-import-*.json")) if path.is_dir() else [path]
+        except OSError as exc:
+            print(f"xova-scan: cannot read {_c(item)}: {_c(exc.strerror or str(exc), home=False)}", file=sys.stderr)
+            return sys.exit(2)
+        if not files:
+            print(f"xova-scan: no xova-import-*.json files in {_c(item)}", file=sys.stderr)
+            return sys.exit(2)
+        docs = []
+        for f in files:
+            count += 1
+            try:
+                if count > MAX_MERGE_FILES:
+                    raise ValueError(f"more than {MAX_MERGE_FILES} files")
+                if not stat.S_ISREG(f.lstat().st_mode):
+                    raise ValueError("not a regular file")
+                with f.open("rb") as fh:
+                    data = fh.read(MAX_MERGE_BYTES + 1)
+                if len(data) > MAX_MERGE_BYTES:
+                    raise ValueError("file is over 1 MiB")
+                total_bytes += len(data)
+                if total_bytes > MAX_MERGE_TOTAL:
+                    raise ValueError("inputs total over 64 MiB")
+                docs.append(json.loads(data.decode("utf-8")))
+            except (OSError, ValueError, UnicodeError, RecursionError) as exc:
+                print(f"xova-scan: cannot read {_c(str(f))}: {_c(str(exc)[:200], home=False)}", file=sys.stderr)
+                return sys.exit(2)
+        sets.append((path, docs))
+    try:
+        result = merge([docs for _, docs in sets], team=a.team)
+    except ValueError as exc:
+        print(f"xova-scan: {_c(str(exc), home=False)}", file=sys.stderr)
+        return sys.exit(2)
+    total = 0
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        for i, doc in enumerate(result, 1):
+            path = out / f"xova-import-{i}.json"
+            path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+            total += len(doc["entries"])
+            print(f"wrote {_c(str(path))} ({len(doc['entries'])} entries)")
+    except OSError as exc:
+        print(f"xova-scan: cannot write to {_c(str(out))}: {_c(exc.strerror or str(exc), home=False)}", file=sys.stderr)
+        return sys.exit(2)
+    print(f"{total} AI systems from {len(sets)} export sets: import them in XOVA under Inventory, Import. "
+          "Re-run merge with new exports later; XOVA refreshes the same entries.")
+    return 0
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["merge"]:
+        return _merge_main(argv[1:])
     p = argparse.ArgumentParser(prog="xova-scan", description="Find the AI on this machine and check it against your rules.")
     p.add_argument("roots", nargs="*", help="folders to search for code (default: your home folder)")
     p.add_argument("--rules", help="JSON rules file, e.g. {\"approved\": [\"Claude\", \"openai\"]}")
