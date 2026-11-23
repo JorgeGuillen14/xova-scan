@@ -54,32 +54,32 @@ What your AI did in the last 30 days (1 agent session)
 Fix first
   1. Codex: This AI agent runs commands and changes files without asking first. One bad prompt or poisoned web page can act with your full access. Turn approvals back on.
   2. supabase: This MCP server's config holds a secret in plain text (env, header, URL or argument). Use an environment variable reference.
-  3. OPENAI_API_KEY: An AI key is stored in plain text inside a git repository. Confirm it can never be committed: git check-ignore -v '/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/shop/.env' must print a rule, and git ls-files must not list it. Better: use a secrets manager.
+  3. OPENAI_API_KEY: An AI key is stored in plain text inside a git repository. Confirm it can never be committed: git check-ignore -v "$HOME"/code/shop/.env must print a rule, and git ls-files must not list it. Better: use a secrets manager.
 
 MCP servers (3)
-  - filesystem  Claude Desktop (/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/Library/Application Support/Claude/claude_desktop_config.json)
-  - playwright  Claude Desktop (/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/Library/Application Support/Claude/claude_desktop_config.json)
-  - supabase  Cursor (/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/.cursor/mcp.json)
+  - filesystem  Claude Desktop (~/Library/Application Support/Claude/claude_desktop_config.json)
+  - playwright  Claude Desktop (~/Library/Application Support/Claude/claude_desktop_config.json)
+  - supabase  Cursor (~/.cursor/mcp.json)
 
 AI apps (2)
-  - Claude  /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/Applications/Claude.app
-  - Cursor  /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/Applications/Cursor.app
+  - Claude  ~/Applications/Claude.app
+  - Cursor  ~/Applications/Cursor.app
 
 AI libraries in code (2)
-  - anthropic  /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/api/requirements.txt
-  - openai  /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/shop/package.json
+  - anthropic  ~/code/api/requirements.txt
+  - openai  ~/code/shop/package.json
 
 AI keys (names only) (2)
-  - OPENAI_API_KEY  in /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/shop/.env
-  - SUPABASE_ACCESS_TOKEN  in Cursor config for MCP server 'supabase' (/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/.cursor/mcp.json)
+  - OPENAI_API_KEY  in ~/code/shop/.env
+  - SUPABASE_ACCESS_TOKEN  in Cursor config for MCP server 'supabase' (~/.cursor/mcp.json)
 
 All rule findings (5)
   ! agent-runs-without-asking: Codex  This AI agent runs commands and changes files without asking first. One bad prompt or poisoned web page can act with your full access. Turn approvals back on.
       in ~/.codex/config.toml
   ! no-secrets-in-mcp-config: supabase  This MCP server's config holds a secret in plain text (env, header, URL or argument). Use an environment variable reference.
-      in Cursor (/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/.cursor/mcp.json)
-  ! plaintext-ai-key-in-repo: OPENAI_API_KEY  An AI key is stored in plain text inside a git repository. Confirm it can never be committed: git check-ignore -v '/var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/shop/.env' must print a rule, and git ls-files must not list it. Better: use a secrets manager.
-      in /var/folders/6g/[redacted]/T/tmp_6rqg9f7/demo-home/code/shop/.env
+      in Cursor (~/.cursor/mcp.json)
+  ! plaintext-ai-key-in-repo: OPENAI_API_KEY  An AI key is stored in plain text inside a git repository. Confirm it can never be committed: git check-ignore -v "$HOME"/code/shop/.env must print a rule, and git ls-files must not list it. Better: use a secrets manager.
+      in ~/code/shop/.env
   ! unpinned-mcp-server (2): playwright, supabase
       This MCP server downloads its latest code every time it starts. Pin an exact version so new code can't arrive unreviewed.
 

@@ -199,11 +199,18 @@ def _safe(name):
     return "[redacted: looks like a secret]" if _looks_secret(name) or any(_looks_secret(p) for p in pieces) else name
 
 
+_SAFE_PREFIX = None  # the scanned home folder: the user's own, never redacted
+
+
 def _safe_path(path) -> str:
-    """Locations are printed, so any folder or file name shaped like a key is redacted."""
+    """Locations are printed, so any folder or file name below the home folder shaped like a key is redacted."""
     text = str(path)
+    prefix = ""
+    if _SAFE_PREFIX and _SAFE_PREFIX in text:
+        i = text.index(_SAFE_PREFIX) + len(_SAFE_PREFIX)
+        prefix, text = text[:i], text[i:]
     parts = re.split(r"([/\\])", text)
-    return "".join(p if p in ("/", "\\") or _safe(p) == p else "[redacted]" for p in parts)
+    return prefix + "".join(p if p in ("/", "\\") or _safe(p) == p else "[redacted]" for p in parts)
 
 
 def _is_reference(val: str) -> bool:
@@ -567,6 +574,8 @@ def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None, with_acti
     rules = validate_rules(rules)
     roots = [Path(r) for r in (roots or [home])]
     system = system or os.environ.get("XOVA_SCAN_SYSTEM") or platform.system()  # env pin is for tests
+    global _SAFE_PREFIX
+    _SAFE_PREFIX = str(home)
     rep = _Report()
     rep.home = home
     sources = _home_mcp_sources(home, system)
