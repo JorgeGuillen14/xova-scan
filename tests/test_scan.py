@@ -1,4 +1,7 @@
 import io
+import os
+import subprocess
+import threading
 import json
 import socket
 import tempfile
@@ -36,13 +39,13 @@ class Machine:
         app = self.home / "code/shop"
         write(app / "package.json", json.dumps({"dependencies": {"openai": "^5.0.0", "react": "18"}, "devDependencies": {"@anthropic-ai/sdk": "1"}}))
         write(app / ".env", f"OPENAI_API_KEY={SECRET}\nDATABASE_URL=postgres://x\n")
-        (app / ".git").mkdir()
+        subprocess.run(["git", "init", "-q", str(app)], check=True)
         api = self.home / "code/api"
         write(api / "requirements.txt", "langchain==0.3\nrequests\n")
         write(api / "pyproject.toml", '[project]\ndependencies = ["anthropic>=0.40", "fastapi"]\n')
         write(api / ".env", f"ANTHROPIC_API_KEY={SECRET}\n")
         write(api / ".gitignore", ".env\n")
-        (api / ".git").mkdir()
+        subprocess.run(["git", "init", "-q", str(api)], check=True)
         write(self.home / "code/shop/node_modules/openai/package.json", json.dumps({"dependencies": {"ollama": "1"}}))
 
 
@@ -125,6 +128,122 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("found", data)
         self.assertIn("note", data)
+
+
+class HostileInputTests(unittest.TestCase):
+    """Review findings 1-11: leaks, crashes, hangs, false safe verdicts."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.home = self.root / "home"
+        self.code = self.home / "code"
+        self.code.mkdir(parents=True)
+        self.apps = self.root / "Applications"
+        self.apps.mkdir()
+
+    def tearDown(self):
+        os.system(f"chmod -R u+rwx {self.root}")
+        self.tmp.cleanup()
+
+    def run_scan(self, rules=None):
+        return scan(home=self.home, apps_dir=self.apps, roots=[self.code], rules=rules)
+
+    def cursor(self, servers):
+        write(self.home / ".cursor/mcp.json", json.dumps({"mcpServers": servers}))
+
+    def test_url_args_command_and_header_tokens_never_leak(self):
+        self.cursor({"urltok": {"url": "https://user:LEAK0@mcp.x/sse?api_key=LEAK1"},
+                     "argtok": {"command": "npx", "args": ["srv", "--token=LEAK2", "--api-key", "LEAK5"]},
+                     "cmdtok": {"command": "LEAK3=1 /usr/local/bin/npx"},
+                     "xkey": {"url": "https://h", "headers": {"X-API-Key": "LEAK4"}}})
+        r = self.run_scan()
+        self.assertNotIn("LEAK", json.dumps(r))
+        flagged = sorted(f["subject"] for f in r["findings"] if f["rule"] == "no-secrets-in-mcp-config")
+        self.assertEqual(flagged, ["argtok", "urltok", "xkey"])
+        keys = [f["name"] for f in r["found"] if f["kind"] == "api_key"]
+        self.assertIn("X-API-Key", keys)
+        runs = {f["name"]: f["runs"] for f in r["found"] if f["kind"] == "mcp_server"}
+        self.assertEqual(runs["urltok"], "https://mcp.x")
+        self.assertEqual(runs["argtok"], "npx")
+
+    def test_malformed_files_are_recorded_not_crashed(self):
+        write(self.code / "a/package.json", "[]")
+        write(self.code / "b/pyproject.toml", 'project = "x"\n')
+        self.cursor({"bad1": {"args": 5}, "bad2": {"url": {"a": 1}}, "ok": {"command": "uvx"}})
+        r = self.run_scan()
+        self.assertIn("ok", [f["name"] for f in r["found"] if f["kind"] == "mcp_server"])
+        self.assertTrue(any("package.json" in u for u in r["unreadable"]))
+
+    def test_fifo_and_device_symlinks_do_not_hang(self):
+        (self.code / "f").mkdir()
+        os.mkfifo(self.code / "f/.env")
+        os.symlink("/dev/zero", self.code / "f/requirements.txt")
+        done = []
+        t = threading.Thread(target=lambda: done.append(self.run_scan()), daemon=True)
+        t.start(); t.join(5)
+        self.assertTrue(done, "scan hung")
+
+    def git_repo(self, path):
+        path.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(path)], check=True)
+
+    def test_gitignore_star_env_does_not_hide_prod_env(self):
+        self.git_repo(self.code / "r")
+        write(self.code / "r/.gitignore", ".env*\n")
+        write(self.code / "r/prod.env", "OPENAI_API_KEY=x\n")
+        hit = [f["where"] for f in self.run_scan()["findings"] if f["rule"] == "no-plaintext-keys-in-git"]
+        self.assertTrue(any(h.endswith("prod.env") for h in hit))
+
+    def test_gitignore_negation_is_respected(self):
+        self.git_repo(self.code / "n")
+        write(self.code / "n/.gitignore", ".env\n!.env\n")
+        write(self.code / "n/.env", "OPENAI_API_KEY=x\n")
+        self.assertTrue([f for f in self.run_scan()["findings"] if f["rule"] == "no-plaintext-keys-in-git"])
+
+    def test_env_in_subfolder_of_repo_is_checked(self):
+        self.git_repo(self.code / "b")
+        write(self.code / "b/sub/.env", "OPENAI_API_KEY=x\n")
+        self.assertTrue([f for f in self.run_scan()["findings"] if f["rule"] == "no-plaintext-keys-in-git"])
+
+    def test_env_example_templates_are_not_flagged(self):
+        self.git_repo(self.code / "t")
+        write(self.code / "t/.env.example", "OPENAI_API_KEY=\n")
+        write(self.code / "t/.env.sample", "OPENAI_API_KEY=\n")
+        self.assertFalse([f for f in self.run_scan()["findings"] if f["rule"] == "no-plaintext-keys-in-git"])
+
+    def test_more_mcp_locations(self):
+        write(self.code / "p/.mcp.json", json.dumps({"mcpServers": {"projsrv": {"command": "npx"}}}))
+        write(self.code / "p/.vscode/mcp.json", json.dumps({"servers": {"vssrv": {"command": "npx"}}}))
+        write(self.code / "p/.cursor/mcp.json", json.dumps({"mcpServers": {"cursrv": {"command": "npx"}}}))
+        write(self.home / ".codex/config.toml", '[mcp_servers.codexsrv]\ncommand = "npx"\n')
+        write(self.home / ".config/zed/settings.json", json.dumps({"context_servers": {"zedsrv": {"command": {"path": "npx"}}}}))
+        write(self.home / ".lmstudio/mcp.json", json.dumps({"mcpServers": {"lmsrv": {"command": "npx"}}}))
+        names = sorted(f["name"] for f in self.run_scan()["found"] if f["kind"] == "mcp_server")
+        self.assertEqual(names, ["codexsrv", "cursrv", "lmsrv", "projsrv", "vssrv", "zedsrv"])
+
+    def test_no_duplicates(self):
+        write(self.home / ".claude.json", json.dumps({"projects": {"/a": {"mcpServers": {"s": {"command": "npx"}}},
+                                                                   "/b": {"mcpServers": {"s": {"command": "npx"}}}}}))
+        self.cursor({"k": {"command": "npx", "env": {"OPENAI_API_KEY": "v"}, "headers": {"OPENAI_API_KEY": "v"}}})
+        r = self.run_scan()
+        self.assertEqual([f["name"] for f in r["found"] if f["kind"] == "mcp_server"].count("s"), 1)
+        self.assertEqual([f["name"] for f in r["found"] if f["kind"] == "api_key"].count("OPENAI_API_KEY"), 1)
+
+    def test_unreadable_folder_is_listed(self):
+        locked = self.code / "locked"
+        locked.mkdir()
+        os.chmod(locked, 0)
+        self.assertTrue(any("locked" in u for u in self.run_scan()["unreadable"]))
+
+    def test_bad_rules_file_exits_cleanly(self):
+        bad = self.root / "rules.json"
+        bad.write_text("[1]")
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), mock.patch("sys.stderr", err):
+            with self.assertRaises(SystemExit) as cm:
+                main(["--rules", str(bad), "--home", str(self.home), "--apps", str(self.apps), str(self.code)])
+        self.assertEqual(cm.exception.code, 2)
 
 
 if __name__ == "__main__":

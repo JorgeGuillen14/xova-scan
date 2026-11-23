@@ -4,7 +4,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from . import scan, __version__
+from . import scan, validate_rules, __version__
 
 LABELS = {"mcp_server": "MCP servers", "ai_app": "AI apps", "ai_library": "AI libraries in code", "api_key": "AI keys (names only)"}
 
@@ -41,7 +41,13 @@ def main(argv=None):
     p.add_argument("--apps", default="/Applications", help=argparse.SUPPRESS)
     p.add_argument("--version", action="version", version=__version__)
     a = p.parse_args(argv)
-    rules = json.loads(Path(a.rules).read_text()) if a.rules else None
+    rules = None
+    if a.rules:
+        try:
+            rules = validate_rules(json.loads(Path(a.rules).read_text()))
+        except (OSError, ValueError) as exc:
+            print(f"xova-scan: bad rules file {a.rules}: {exc}", file=sys.stderr)
+            return sys.exit(2)
     report = scan(home=a.home, apps_dir=a.apps, roots=a.roots or None, rules=rules)
     if a.json:
         print(json.dumps(report, indent=2))
