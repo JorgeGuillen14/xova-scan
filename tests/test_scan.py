@@ -270,6 +270,7 @@ class ReviewTwoTests(unittest.TestCase):
     def test_never_runs_any_program(self):
         repo = self.code / "r"
         (repo / ".git").mkdir(parents=True)
+        write(repo / ".git/HEAD", "ref: refs/heads/main\n")
         write(repo / ".env", "OPENAI_API_KEY=x\n")
         with mock.patch.object(subprocess, "run", side_effect=AssertionError("ran a program")), \
              mock.patch.object(subprocess, "Popen", side_effect=AssertionError("ran a program")), \
@@ -280,6 +281,7 @@ class ReviewTwoTests(unittest.TestCase):
     def test_gitignore_rules_read_without_git(self):
         repo = self.code / "g"
         (repo / ".git/info").mkdir(parents=True)
+        write(repo / ".git/HEAD", "ref: refs/heads/main\n")
         write(repo / ".gitignore", "# c\n.env\nsecrets/\n/root.env\n")
         write(repo / ".env", "OPENAI_API_KEY=x\n")             # ignored
         write(repo / "secrets/.env", "OPENAI_API_KEY=x\n")     # ignored (dir)
@@ -291,7 +293,8 @@ class ReviewTwoTests(unittest.TestCase):
         write(repo / "local.env", "OPENAI_API_KEY=x\n")        # ignored (info/exclude)
         hit = sorted(Path(f["where"]).relative_to(repo).as_posix() for f in self.run_scan()["findings"]
                      if f["rule"] == "no-plaintext-keys-in-git")
-        self.assertEqual(hit, ["sub/.env", "sub/root.env"])
+        # Only exact literal rules count as proof; info/exclude is not read, so local.env is (safely) warned about.
+        self.assertEqual(hit, ["local.env", "sub/.env", "sub/root.env"])
 
     def test_env_references_are_not_secrets(self):
         self.cursor({"a": {"url": "https://h", "headers": {"Authorization": "Bearer ${X}"}},
@@ -331,6 +334,82 @@ class ReviewTwoTests(unittest.TestCase):
         self.assertEqual(text.count("  - mcp "), 1)
         self.assertIn("3 projects", text)
         self.assertIn(".cursor/mcp.json", text.split("Rule findings")[1])
+
+
+class ReviewThreeTests(unittest.TestCase):
+    """Third review: never call a key file safe without unambiguous proof; no crash on deep nesting."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.code = Path(self.tmp.name) / "home/code"
+        self.code.mkdir(parents=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def flagged(self):
+        r = scan(home=self.code.parent, apps_dir=Path(self.tmp.name) / "none", roots=[self.code])
+        return sorted(Path(f["where"]).relative_to(self.code).as_posix() for f in r["findings"]
+                      if f["rule"] == "no-plaintext-keys-in-git")
+
+    def repo(self, name, gitignore: bytes):
+        r = self.code / name
+        subprocess.run(["git", "init", "-q", str(r)], check=True)
+        (r / ".gitignore").write_bytes(gitignore)
+        return r
+
+    def key(self, path):
+        write(path, "OPENAI_API_KEY=x\n")
+
+    def test_wildcards_are_never_proof(self):
+        r = self.repo("w", b"/*.env\n")
+        self.key(r / "config/prod.env")
+        r2 = self.repo("w2", b".en[^v]\n")
+        self.key(r2 / ".env")
+        self.assertEqual(self.flagged(), ["w/config/prod.env", "w2/.env"])
+
+    def test_line_tricks_are_never_proof(self):
+        for name, data in [("cr", b"#c\r.env\n"), ("ff", b"#c\x0c.env\n"), ("tab", b".env\t\n"),
+                           ("bad", b".e\xffnv\n")]:
+            self.key(self.repo(name, data) / ".env")
+        self.assertEqual(self.flagged(), ["bad/.env", "cr/.env", "ff/.env", "tab/.env"])
+
+    def test_crlf_literal_is_proof(self):
+        self.key(self.repo("crlf", b".env\r\n") / ".env")
+        self.assertEqual(self.flagged(), [])
+
+    def test_symlinked_gitignore_is_never_proof(self):
+        r = self.code / "s"
+        subprocess.run(["git", "init", "-q", str(r)], check=True)
+        (self.code / "real.gitignore").write_text(".env\n")
+        os.symlink(self.code / "real.gitignore", r / ".gitignore")
+        self.key(r / ".env")
+        self.assertEqual(self.flagged(), ["s/.env"])
+
+    def test_fake_nested_git_does_not_hide(self):
+        r = self.repo("n", b"")
+        (r / "sub/.git/info").mkdir(parents=True)
+        (r / "sub/.git/info/exclude").write_text(".env\n")
+        (r / "sub/.gitignore").write_text(".env\n")
+        self.key(r / "sub/.env")
+        # sub/.git is not a real repo, so the outer repo rules apply; sub/.gitignore literal still counts there
+        self.assertEqual(self.flagged(), [])
+        (r / "sub/.gitignore").unlink()
+        self.assertEqual(self.flagged(), ["n/sub/.env"])
+
+    def test_already_committed_file_is_flagged(self):
+        r = self.repo("t", b"")
+        self.key(r / ".env")
+        subprocess.run(["git", "-C", str(r), "add", "-f", ".env"], check=True)
+        (r / ".gitignore").write_text(".env\n")
+        self.assertEqual(self.flagged(), ["t/.env"])
+
+    def test_deep_nesting_does_not_crash(self):
+        write(self.code / "p/.mcp.json", "[" * 200000)
+        write(self.code / "q/package.json", '{"a":' * 100000 + "1" + "}" * 100000)
+        write(self.code / "r/pyproject.toml", "a = " + "[" * 100000 + "]" * 100000 + "\n")
+        r = scan(home=self.code.parent, apps_dir=Path(self.tmp.name) / "none", roots=[self.code])
+        self.assertTrue(any("package.json" in u for u in r["unreadable"]))
 
 
 if __name__ == "__main__":

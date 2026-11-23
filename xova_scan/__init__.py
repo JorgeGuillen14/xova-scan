@@ -8,7 +8,6 @@ another program (not even git): .gitignore files are read as plain text.
 import json
 import os
 import re
-import fnmatch
 import stat
 import tomllib
 from pathlib import Path
@@ -186,7 +185,7 @@ def _scan_mcp_file(client, path, rep):
     try:
         text = _read(path)
         data = tomllib.loads(text) if path.suffix == ".toml" else json.loads(text)
-    except (_Unreadable, ValueError, tomllib.TOMLDecodeError):
+    except (_Unreadable, ValueError, RecursionError, tomllib.TOMLDecodeError):
         rep.unreadable.append(f"{client}: {path}")
         return
     where = f"{client} ({path})"
@@ -258,55 +257,60 @@ def _deps_from(path: Path):
 
 
 def _git_root(start: Path, stop: Path):
+    """Nearest folder with a real repository (.git directory holding HEAD). A .git FILE (worktree) is returned
+    as unprovable; a fake .git directory without HEAD is skipped, as git itself does."""
     for d in [start, *start.parents]:
-        if (d / ".git").exists():
-            return d
+        g = d / ".git"
+        if g.is_dir() and (g / "HEAD").is_file():
+            return d, True
+        if g.is_file():
+            return d, False
         if d == stop.parent:
             break
-    return None
+    return None, False
 
 
-def _patterns(path: Path, base: Path):
+MAX_INDEX_BYTES = 50_000_000
+UNSAFE_CHARS = set("*?[\\!") | {chr(c) for c in range(32)} | {"\x85", "\u2028", "\u2029"}
+
+
+def _proven_ignored(repo: Path, path: Path) -> bool:
+    """True only with unambiguous proof that git ignores the file. We do not copy git's matcher: any wildcard,
+    escape, negation, control character, symlink, bad encoding or committed file means 'not proven' (warn)."""
+    rel = path.relative_to(repo)
     try:
-        lines = _read(path).splitlines()
-    except _Unreadable:
-        return []
-    out = []
-    for line in lines:
-        line = line.rstrip()
-        if not line or line.lstrip().startswith("#"):
-            continue
-        neg = line.startswith("!")
-        pat = line[1:] if neg else line
-        dir_only = pat.endswith("/")
-        pat = pat.rstrip("/")
-        anchored = "/" in pat
-        out.append((base, pat.lstrip("/"), neg, dir_only, anchored))
-    return out
-
-
-def _git_ignored(repo: Path, path: Path) -> bool:
-    """Read .gitignore files and .git/info/exclude as text; last match wins. No program is run.
-    Global excludes are not read, so a doubtful file is reported (a warning), never hidden."""
-    rel_dirs = path.parent.relative_to(repo).parts
-    dirs = [repo.joinpath(*rel_dirs[:i]) for i in range(len(rel_dirs) + 1)]
-    rules = _patterns(repo / ".git/info/exclude", repo)
-    for d in dirs:
-        rules += _patterns(d / ".gitignore", d)
-    ignored = False
-    for base, pat, neg, dir_only, anchored in rules:
-        try:
-            parts = path.relative_to(base).parts
-        except ValueError:
-            continue
-        candidates = parts[:-1] if dir_only else parts
-        if anchored:
-            hit = any(fnmatch.fnmatchcase("/".join(parts[:i]), pat) for i in range(1, len(candidates) + 1))
-        else:
-            hit = any(fnmatch.fnmatchcase(c, pat) for c in candidates)
-        if hit:
-            ignored = not neg
-    return ignored
+        idx = repo / ".git/index"
+        if os.path.lexists(idx):
+            st = os.lstat(idx)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_INDEX_BYTES:
+                return False
+            with open(idx, "rb") as fh:
+                if rel.as_posix().encode() in fh.read():
+                    return False  # already committed: .gitignore does not untrack it
+        matched = False
+        for i in range(len(rel.parts)):
+            d = repo.joinpath(*rel.parts[:i])
+            gi = d / ".gitignore"
+            if not os.path.lexists(gi):
+                continue
+            st = os.lstat(gi)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_BYTES:
+                return False
+            with open(gi, "rb") as fh:
+                text = fh.read().decode("utf-8")  # strict: bad bytes mean not proven
+            for line in text.split("\n"):
+                line = line[:-1] if line.endswith("\r") else line
+                if line.startswith("#") or not line:
+                    if any(c in UNSAFE_CHARS - {"\\", "!"} for c in line):
+                        return False
+                    continue
+                if any(c in UNSAFE_CHARS for c in line):
+                    return False
+                if line == path.name or (line == "/" + path.name and d == path.parent):
+                    matched = True
+        return matched
+    except (OSError, UnicodeDecodeError, ValueError):
+        return False
 
 
 def _is_env_file(name: str) -> bool:
@@ -336,7 +340,7 @@ def _scan_projects(roots, rep, home_sources=frozenset()):
                 if f in ("package.json", "pyproject.toml") or (f.startswith("requirements") and f.endswith(".txt")):
                     try:
                         deps = _deps_from(p)
-                    except (_Unreadable, ValueError, TypeError, AttributeError, tomllib.TOMLDecodeError):
+                    except (_Unreadable, ValueError, TypeError, AttributeError, RecursionError, tomllib.TOMLDecodeError):
                         rep.unreadable.append(str(p))
                         continue
                     for dep in deps:
@@ -357,8 +361,8 @@ def _scan_projects(roots, rep, home_sources=frozenset()):
                             keys.append(m.group(1))
                     if not keys:
                         continue
-                    repo = _git_root(d, root)
-                    exposed = repo is not None and not _git_ignored(repo, p)
+                    repo, valid = _git_root(d, root)
+                    exposed = repo is not None and not (valid and _proven_ignored(repo, p))
                     for key in keys:
                         key = _safe(key)
                         rep.add("api_key", key, str(p))
