@@ -14,9 +14,13 @@ xova-scan ~/code --rules rules.json
 xova-scan --json > ai-inventory.json
 ```
 
+**Works on macOS, Windows and Linux** (tested on all three in CI).
+
 **What it finds**
 - MCP servers set up in Claude Desktop, Claude Code, Cursor, Windsurf, VS Code and Gemini CLI
 - AI apps installed (ChatGPT, Claude, Cursor, Ollama, LM Studio and more)
+- AI command-line tools (claude, codex, gemini, ollama, aider and more)
+- Cloud accounts set up on the machine (AWS, Azure, Google Cloud): presence only, nothing inside is read. Checking what AI runs in those clouds is what XOVA does.
 - AI libraries in your code (OpenAI, Anthropic, LangChain, MCP SDKs and more), across every project
 - AI API keys, by **name only**
 

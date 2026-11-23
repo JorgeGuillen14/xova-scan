@@ -5,7 +5,8 @@ from pathlib import Path
 
 from . import scan, validate_rules, __version__
 
-LABELS = {"mcp_server": "MCP servers", "ai_app": "AI apps", "ai_library": "AI libraries in code", "api_key": "AI keys (names only)"}
+LABELS = {"mcp_server": "MCP servers", "ai_app": "AI apps", "ai_cli": "AI command-line tools", "ai_library": "AI libraries in code",
+          "api_key": "AI keys (names only)", "cloud_account": "Cloud accounts set up here (XOVA can check what AI runs in them)"}
 
 
 _CONTROL = {c: f"\\x{c:02x}" for c in [*range(32), 127, *range(128, 160)]}

@@ -7,6 +7,8 @@ another program (not even git).
 """
 import json
 import os
+import platform
+import shutil
 import re
 import shlex
 import stat
@@ -14,7 +16,7 @@ import tomllib
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 NOTE = ("Local scan only. Nothing left this machine. Secret values were never read into the report. "
         "Finding nothing does not prove there is no AI here.")
@@ -122,8 +124,24 @@ def _read(path: Path) -> str:
         raise _Unreadable(str(path)) from exc
 
 
-def _home_mcp_sources(home: Path):
-    sup = home / "Library/Application Support"
+def _app_support(home: Path, system: str) -> Path:
+    """Where desktop apps keep settings: macOS Application Support, Windows AppData/Roaming, Linux ~/.config."""
+    if system == "Windows":
+        return home / "AppData/Roaming"
+    if system == "Darwin":
+        return home / "Library/Application Support"
+    return home / ".config"
+
+
+def claude_desktop_logs(home: Path, system: str) -> Path:
+    if system == "Darwin":
+        return home / "Library/Logs/Claude"
+    return _app_support(home, system) / "Claude/logs"
+
+
+def _home_mcp_sources(home: Path, system: str = "Darwin"):
+    sup = _app_support(home, system)
+    zed = sup / "Zed/settings.json" if system == "Windows" else home / ".config/zed/settings.json"
     return [
         ("Claude Desktop", sup / "Claude/claude_desktop_config.json"),
         ("Claude Code", home / ".claude.json"),
@@ -135,7 +153,7 @@ def _home_mcp_sources(home: Path):
         ("VS Code Insiders", sup / "Code - Insiders/User/settings.json"),
         ("Gemini CLI", home / ".gemini/settings.json"),
         ("Codex", home / ".codex/config.toml"),
-        ("Zed", home / ".config/zed/settings.json"),
+        ("Zed", zed),
         ("LM Studio", home / ".lmstudio/mcp.json"),
     ]
 
@@ -274,13 +292,68 @@ def _scan_mcp_file(client, path, rep):
                     rep.inline_secrets.add(_safe(name))
 
 
-def _scan_apps(apps_dir: Path, rep):
-    if not apps_dir.is_dir():
+# Windows install folder names (lowercase) and Linux .desktop file stems (lowercase) for each app.
+WINDOWS_APP_DIRS = {"cursor": "Cursor", "anthropicclaude": "Claude", "claude": "Claude", "chatgpt": "ChatGPT",
+                    "windsurf": "Windsurf", "ollama": "Ollama", "lm studio": "LM Studio", "lm-studio": "LM Studio",
+                    "perplexity": "Perplexity", "jan": "Jan", "msty": "Msty", "zed": "Zed", "warp": "Warp",
+                    "antigravity": "Antigravity", "granola": "Granola"}
+LINUX_DESKTOP = {"cursor": "Cursor", "claude-desktop": "Claude", "claude": "Claude", "windsurf": "Windsurf",
+                 "lm-studio": "LM Studio", "lmstudio": "LM Studio", "jan": "Jan", "msty": "Msty", "zed": "Zed",
+                 "dev.zed.zed": "Zed", "warp": "Warp", "ollama": "Ollama", "antigravity": "Antigravity",
+                 "chatgpt": "ChatGPT", "perplexity": "Perplexity"}
+AI_CLIS = ["claude", "codex", "gemini", "ollama", "aider", "llm", "lms", "goose", "opencode", "amp", "cursor-agent", "qwen"]
+CLOUD = [("AWS", (".aws",)), ("Azure", (".azure",)), ("Google Cloud", (".config/gcloud", "AppData/Roaming/gcloud"))]
+
+
+def _scan_apps(apps_dir: Path, rep, home: Path, system: str):
+    if system == "Darwin":
+        for d in (apps_dir, home / "Applications"):
+            if d.is_dir():
+                present = {p.stem for p in d.glob("*.app")}
+                for app in AI_APPS:
+                    if app in present:
+                        rep.add("ai_app", app, str(d / f"{app}.app"))
         return
-    present = {p.stem for p in apps_dir.glob("*.app")}
-    for app in AI_APPS:
-        if app in present:
-            rep.add("ai_app", app, str(apps_dir / f"{app}.app"))
+    if system == "Windows":
+        local = home / "AppData/Local"
+        places = [local / "Programs", local, Path(os.environ.get("ProgramFiles", "C:/Program Files"))]
+        for d in places:
+            try:
+                entries = [e for e in d.iterdir() if e.is_dir()]
+            except OSError:
+                continue
+            for e in entries:
+                app = WINDOWS_APP_DIRS.get(e.name.lower())
+                if app:
+                    rep.add("ai_app", app, str(e))
+        return
+    for d in (home / ".local/share/applications", Path("/usr/share/applications"),
+              Path("/var/lib/flatpak/exports/share/applications"), Path("/var/lib/snapd/desktop/applications")):
+        try:
+            entries = list(d.glob("*.desktop"))
+        except OSError:
+            continue
+        for e in entries:
+            app = LINUX_DESKTOP.get(e.stem.lower())
+            if app:
+                rep.add("ai_app", app, str(e))
+
+
+def _scan_clis(rep):
+    """AI command-line tools on PATH. shutil.which only checks files; nothing is run."""
+    for name in AI_CLIS:
+        path = shutil.which(name)
+        if path:
+            rep.add("ai_cli", name, path)
+
+
+def _scan_cloud(home: Path, rep):
+    """Cloud accounts set up on this machine: existence of the config folder only. No file inside is read."""
+    for label, rels in CLOUD:
+        for rel in rels:
+            if os.path.lexists(home / rel):
+                rep.add("cloud_account", label, str(home / rel))
+                break
 
 
 def _strip_req(req: str) -> str:
@@ -435,7 +508,7 @@ def _check(rep, rules):
     approved = {a.lower() for a in rules.get("approved", [])}
     if approved:
         for item in rep.found:
-            if item["kind"] == "api_key":
+            if item["kind"] in ("api_key", "cloud_account"):
                 continue
             if item["name"].lower() in approved:
                 item["status"] = "Approved"
@@ -456,21 +529,26 @@ def validate_rules(rules):
     return rules
 
 
-def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None, with_activity=True, days=30):
+def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None, with_activity=True, days=30, system=None):
     home = Path(home)
     rules = validate_rules(rules)
     roots = [Path(r) for r in (roots or [home])]
+    system = system or os.environ.get("XOVA_SCAN_SYSTEM") or platform.system()  # env pin is for tests
     rep = _Report()
-    for client, path in _home_mcp_sources(home):
+    sources = _home_mcp_sources(home, system)
+    for client, path in sources:
         if path.exists():
             _scan_mcp_file(client, path, rep)
-    _scan_apps(Path(apps_dir), rep)
-    _scan_projects(roots, rep, {p for _, p in _home_mcp_sources(home)})
+    _scan_apps(Path(apps_dir), rep, home, system)
+    _scan_clis(rep)
+    _scan_cloud(home, rep)
+    _scan_projects(roots, rep, {p for _, p in sources})
     _posture(home, rep)
     act = None
     if with_activity:
         from .activity import activity
-        act = activity(home, TOKEN_SHAPE, days=days, unreadable=rep.unreadable)
+        act = activity(home, TOKEN_SHAPE, days=days, unreadable=rep.unreadable,
+                       desktop_logs=claude_desktop_logs(home, system))
     findings = _check(rep, rules)
     if act and act["secrets_in_logs"]:
         files = act["secret_log_files"]

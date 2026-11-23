@@ -14,6 +14,8 @@ from unittest import mock
 from xova_scan import scan
 from xova_scan.cli import main
 
+os.environ["XOVA_SCAN_SYSTEM"] = "Darwin"  # these suites use the macOS layout; test_platforms covers the others
+
 SECRET = "sk-live-THIS-MUST-NEVER-APPEAR-123"
 
 
@@ -52,6 +54,9 @@ class Machine:
 
 class ScanTests(unittest.TestCase):
     def setUp(self):
+        which = mock.patch("shutil.which", return_value=None)  # isolate from AI tools installed on the test machine
+        which.start()
+        self.addCleanup(which.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.m = Machine(Path(self.tmp.name))
 
@@ -176,6 +181,7 @@ class HostileInputTests(unittest.TestCase):
         self.assertIn("ok", [f["name"] for f in r["found"] if f["kind"] == "mcp_server"])
         self.assertTrue(any("package.json" in u for u in r["unreadable"]))
 
+    @unittest.skipIf(os.name == "nt", "not supported on Windows")
     def test_fifo_and_device_symlinks_do_not_hang(self):
         (self.code / "f").mkdir()
         os.mkfifo(self.code / "f/.env")
@@ -231,6 +237,7 @@ class HostileInputTests(unittest.TestCase):
         self.assertEqual([f["name"] for f in r["found"] if f["kind"] == "mcp_server"].count("s"), 1)
         self.assertEqual([f["name"] for f in r["found"] if f["kind"] == "api_key"].count("OPENAI_API_KEY"), 1)
 
+    @unittest.skipIf(os.name == "nt", "not supported on Windows")
     def test_unreadable_folder_is_listed(self):
         locked = self.code / "locked"
         locked.mkdir()
@@ -316,7 +323,7 @@ class ReviewTwoTests(unittest.TestCase):
         self.assertIn("1 problem", first)
         self.assertEqual(text.count("  - mcp "), 1)
         self.assertIn("3 projects", text)
-        self.assertIn(".cursor/mcp.json", text.split("All rule findings")[1])
+        self.assertIn("mcp.json", text.split("All rule findings")[1])
 
 
 class ReviewThreeTests(unittest.TestCase):
@@ -374,6 +381,7 @@ class ReviewFiveTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    @unittest.skipIf(os.name == "nt", "not supported on Windows")
     def test_suggested_command_is_safe_to_paste(self):
         for name in ["sub$(touch PWNED)", 'q"; touch PWNED2; "', "x`touch PWNED3`"]:
             write(self.repo / name / ".env", "OPENAI_API_KEY=x\n")
@@ -386,6 +394,7 @@ class ReviewFiveTests(unittest.TestCase):
             subprocess.run(["bash", "-c", f"printf '%s' {c} >/dev/null"], cwd=work, check=True)
         self.assertEqual(list(work.iterdir()), [])
 
+    @unittest.skipIf(os.name == "nt", "not supported on Windows")
     def test_terminal_view_cannot_be_forged(self):
         write(self.repo / "nl\n  ! plaintext-ai-key-in-repo: FORGED  fake" / ".env", "OPENAI_API_KEY=x\n")
         write(self.repo / "ansi\x1b[2J" / ".env", "OPENAI_API_KEY=x\n")

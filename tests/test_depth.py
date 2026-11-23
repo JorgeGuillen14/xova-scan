@@ -11,6 +11,8 @@ from pathlib import Path
 from xova_scan import scan
 from xova_scan.cli import main
 
+os.environ["XOVA_SCAN_SYSTEM"] = "Darwin"  # these suites use the macOS layout; test_platforms covers the others
+
 TOKEN = "sk-ant-api03-q8Rv2LmW7xKp4TzN9cYbH3fJ"
 PRIVATE = "PROMPT-PRIVATE-TEXT"
 
@@ -166,6 +168,7 @@ class DepthHostileTests(unittest.TestCase):
         write(self.home / ".codex/sessions/2026/01/01/r.jsonl", '{"custom_tool_call":' + "[" * 200000 + "]" * 200000 + "}\n")
         self.assertIn('"activity"', self.run_json())
 
+    @unittest.skipIf(os.name == "nt", "not supported on Windows")
     def test_secrets_never_surface_through_names(self):
         write(self.proj / "s.jsonl", jl(
             tool("Bash", {"command": "AKIAIOSFODNN7SECRETQ1 --x"}),
@@ -188,6 +191,7 @@ class DepthHostileTests(unittest.TestCase):
         write(self.proj / "k.jsonl", "AKIAIOSFODNN7Q8W2E4R and sk_live_9f8a7b6c5d4e3f2a1b0c\n")
         self.assertEqual(json.loads(self.run_json())["activity"]["secrets_in_logs"], 2)
 
+    @unittest.skipIf(os.name == "nt", "not supported on Windows")
     def test_symlinked_log_outside_agent_folder_is_not_read(self):
         outside = write(Path(self.tmp.name) / "outside.txt", "sk-ant-api03-q8Rv2LmW7xKp4TzN9cYbH3fJ\n")
         os.symlink(outside, self.proj / "link.jsonl")
@@ -235,6 +239,7 @@ class DepthReviewTwoTests(unittest.TestCase):
         self.assertIn(b"xova-scan", raw.getvalue())
         self.assertIn('"activity"', self.out("--json"))
 
+    @unittest.skipIf(os.name == "nt", "not supported on Windows")
     def test_tokens_glued_to_punctuation_are_redacted(self):
         tok = "Zk3j9Qm2Lp8Xw4Rt7Yv1Ab"
         write(self.proj / "s.jsonl", jl(

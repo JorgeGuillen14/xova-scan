@@ -236,7 +236,7 @@ def _read_lines(t, path, handler, unreadable):
         unreadable.append(str(path))
 
 
-def activity(home, token_shape, days=30, unreadable=None):
+def activity(home, token_shape, days=30, unreadable=None, desktop_logs=None):
     home = Path(home)
     unreadable = unreadable if unreadable is not None else []
     cutoff = time.time() - days * 86400
@@ -248,7 +248,7 @@ def activity(home, token_shape, days=30, unreadable=None):
         _read_lines(t, p, _claude_line, unreadable)
     for p in codex:
         _read_lines(t, p, _codex_line, unreadable)
-    for log in _recent((home / "Library/Logs/Claude").glob("mcp-server-*.log"), cutoff):
+    for log in _recent(Path(desktop_logs or home / "Library/Logs/Claude").glob("mcp-server-*.log"), cutoff):
         from . import _safe
         server = _safe(log.name[len("mcp-server-"):-len(".log")])
         try:
