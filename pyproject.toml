@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xova-scan"
+version = "0.1.0"
+description = "Find the AI on your machine (MCP servers, AI apps, AI libraries, AI keys) and check it against your rules. Local only."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+xova-scan = "xova_scan.cli:main"
+
+[tool.setuptools]
+packages = ["xova_scan"]
