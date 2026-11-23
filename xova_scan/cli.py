@@ -70,7 +70,13 @@ def _print(report):
         if not items:
             continue
         print(f"{label} ({len(items)})")
-        if kind == "ai_library":
+        if kind == "api_key":
+            by_where = {}
+            for f in items:
+                by_where.setdefault(f["where"], []).append(f["name"])
+            for where, names in by_where.items():
+                print(f"  - {_c(', '.join(sorted(set(names))))}  in {_c(where)}")
+        elif kind == "ai_library":
             groups = {}
             for f in items:
                 groups.setdefault((f["name"], f["status"]), []).append(f["where"])
@@ -82,10 +88,25 @@ def _print(report):
                 print(f"  - {_c(f['name'])}  [{f['status']}]  {_c(f['where'])}")
         print()
     print(f"All rule findings ({len(findings)})" if findings else "Rule findings: none")
+    by_rule = {}
     for f in findings:
-        print(f"  ! {f['rule']}: {_c(f['subject'])}  {_c(f['why'])}")
-        if f.get("where"):
-            print(f"      in {_c(f['where'])}")
+        by_rule.setdefault(f["rule"], []).append(f)
+    for rule, group in by_rule.items():
+        if len(group) == 1:
+            f = group[0]
+            print(f"  ! {rule}: {_c(f['subject'])}  {_c(f['why'])}")
+            if f.get("where"):
+                print(f"      in {_c(f['where'])}")
+            continue
+        subjects = ", ".join(_c(x) for x in dict.fromkeys(f["subject"] for f in group))
+        why = group[0]["why"]
+        if rule == "plaintext-ai-key-in-repo":
+            why = "AI keys are stored in plain text inside git repositories. For each file, git check-ignore -v <file> must print a rule and git ls-files must not list it."
+        print(f"  ! {rule} ({len(group)}): {subjects}")
+        print(f"      {_c(why)}")
+        for f in group:
+            if f.get("where"):
+                print(f"      - {_c(f['subject'])}: {_c(f['where'])}")
     if report["unreadable"]:
         print("\nCould not read (not proof of no AI):")
         for u in report["unreadable"][:20]:

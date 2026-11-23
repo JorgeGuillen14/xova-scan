@@ -286,3 +286,28 @@ class DeterminismTests(unittest.TestCase):
         with mock.patch("os.walk", reversed_walk), mock.patch.object(Path, "glob", reversed_glob):
             second = json.dumps(base.run_scan(), sort_keys=False)
         self.assertEqual(first, second)
+
+
+class ReadabilityTests(unittest.TestCase):
+    def test_repeated_findings_print_once_with_all_subjects(self):
+        base = DepthTests("test_capabilities_say_what_each_server_can_reach")
+        base.setUp()
+        self.addCleanup(base.tearDown)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            main(["--home", str(base.home), "--apps", "/none", str(base.home / "code")])
+        text = out.getvalue()
+        self.assertEqual(text.count("downloads its latest code every time it starts"), 1)
+        self.assertIn("unpinned-mcp-server (2): github, playwright", text)
+
+    def test_keys_are_grouped_by_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            write(home / ".cursor/mcp.json", json.dumps({"mcpServers": {"t": {"command": "npx", "env": {
+                "OPENAI_API_KEY": "${A}", "ANTHROPIC_API_KEY": "${B}", "MISTRAL_API_KEY": "${C}"}}}}))
+            out = io.StringIO()
+            with redirect_stdout(out):
+                main(["--no-activity", "--home", str(home), "--apps", "/none", str(home / "nocode")])
+            text = out.getvalue()
+            self.assertIn("ANTHROPIC_API_KEY, MISTRAL_API_KEY, OPENAI_API_KEY", text)
+            self.assertEqual(text.count("config for MCP server 't'"), 1)
