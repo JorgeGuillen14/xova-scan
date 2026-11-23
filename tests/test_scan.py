@@ -424,4 +424,4 @@ class NoiseTests(unittest.TestCase):
             self.assertEqual([f["name"] for f in r["found"] if f["kind"] == "mcp_server"], [])
             libs = [f["where"] for f in r["found"] if f["kind"] == "ai_library"]
             self.assertEqual(len(libs), 1)
-            self.assertIn("code/real", libs[0])
+            self.assertEqual(Path(libs[0]).parent.name, "real")
