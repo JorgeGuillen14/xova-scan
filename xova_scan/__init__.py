@@ -155,16 +155,23 @@ def _servers(data):
             yield from _servers(proj)
 
 
+SHORT_RANDOM = re.compile(r"^(?=.*[0-9])(?=.*[A-Za-z])[A-Za-z0-9]{12,}$")
+
+
 def _looks_secret(text: str) -> bool:
     if TOKEN_SHAPE.search(text):
         return True
-    return bool(RANDOM_SHAPE.match(text)) and "/" not in text.strip("/") and not text.startswith("-")
+    if RANDOM_SHAPE.match(text) and "/" not in text.strip("/") and not text.startswith("-"):
+        return True
+    # 12+ characters mixing letters and at least 3 digits, e.g. tunnel IDs and short tokens
+    return bool(SHORT_RANDOM.match(text)) and sum(c.isdigit() for c in text) >= 3
 
 
 def _safe(name):
     """Names are printed, so a name that is itself shaped like a token is redacted."""
     name = str(name)
-    return "[redacted: looks like a secret]" if _looks_secret(name) or any(_looks_secret(p) for p in re.split(r"[_\s:=]", name)) else name
+    pieces = re.split(r"[_\s:=]", name) + re.findall(r"[A-Za-z0-9_\-+/=]{12,}", name)
+    return "[redacted: looks like a secret]" if _looks_secret(name) or any(_looks_secret(p) for p in pieces) else name
 
 
 def _is_reference(val: str) -> bool:

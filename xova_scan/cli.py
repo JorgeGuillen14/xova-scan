@@ -13,7 +13,7 @@ _CONTROL = {c: f"\\x{c:02x}" for c in [*range(32), 127, *range(128, 160)]}
 
 def _c(value):
     """Terminal view only: control characters from file names are shown escaped, so they can't forge lines."""
-    return str(value).translate(_CONTROL)
+    return str(value).encode("utf-8", "replace").decode("utf-8").translate(_CONTROL)
 
 
 def _plural(n, word):

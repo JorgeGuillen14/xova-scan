@@ -36,6 +36,7 @@ playwright java javac mvn gradle dotnet swift xcodebuild pod ffmpeg convert magi
 realpath mktemp seq printenv pmset launchctl defaults security plutil sw_vers uname whoami hostname id test nc ping dig
 nslookup openssl base64 shasum md5 sha256sum perl php composer lua R julia""".split())
 _WHICH = {}
+MAX_WHICH = 500
 
 
 def _named_program(prog: str) -> str:
@@ -44,6 +45,8 @@ def _named_program(prog: str) -> str:
     if prog in KNOWN:
         return prog
     if prog not in _WHICH:
+        if len(_WHICH) >= MAX_WHICH:
+            return "other"  # bound the file-system lookups a hostile log can cause
         _WHICH[prog] = bool(PROGRAM.match(prog)) and shutil.which(prog) is not None
     return prog if _WHICH[prog] else "other"
 
@@ -191,7 +194,11 @@ def _codex_line(t: _Tally, line: str):
     body = p.get("input") if isinstance(p.get("input"), str) else p.get("arguments") if isinstance(p.get("arguments"), str) else ""
     if p.get("type") == "local_shell_call" or name in ("exec", "exec_command", "shell"):
         m = CODEX_CMD.search(body)
-        t.command(m.group(1).encode().decode("unicode_escape", errors="ignore") if m else "")
+        try:
+            cmd = m.group(1).encode("utf-8", "surrogatepass").decode("unicode_escape", errors="ignore") if m else ""
+        except (UnicodeError, ValueError):
+            cmd = ""
+        t.command(cmd)
     elif name == "apply_patch":
         for f in PATCH_FILE.findall(body):
             t.file(f)

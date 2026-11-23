@@ -202,3 +202,55 @@ class DepthHostileTests(unittest.TestCase):
         reach = json.loads(self.run_json())["reach"]
         self.assertNotIn("replicate", reach.get("run any command", []))
         self.assertNotIn("executive-briefing", reach.get("run any command", []))
+
+
+class DepthReviewTwoTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name) / "home"
+        self.proj = self.home / ".claude/projects/-p"
+        self.proj.mkdir(parents=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def out(self, *extra):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            main([*extra, "--home", str(self.home), "--apps", "/none", str(self.home / "nocode")])
+        return buf.getvalue()
+
+    def test_lone_surrogates_do_not_crash_text_or_codex(self):
+        bs = "\\"
+        write(self.home / ".codex/sessions/2026/01/01/r.jsonl",
+              '{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{'
+              + bs + '"cmd' + bs + '":' + bs + '"ls ' + bs + 'ud800' + bs + '"}"}}\n')
+        write(self.proj / "s.jsonl", '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__'
+              + bs + 'ud800bad__read","input":{}}]}}\n')
+        raw = io.BytesIO()
+        real_stdout = io.TextIOWrapper(raw, encoding="utf-8", errors="strict")
+        with redirect_stdout(real_stdout):
+            main(["--home", str(self.home), "--apps", "/none", str(self.home / "nocode")])
+        real_stdout.flush()
+        self.assertIn(b"xova-scan", raw.getvalue())
+        self.assertIn('"activity"', self.out("--json"))
+
+    def test_tokens_glued_to_punctuation_are_redacted(self):
+        tok = "Zk3j9Qm2Lp8Xw4Rt7Yv1Ab"
+        write(self.proj / "s.jsonl", jl(
+            tool("Write", {"file_path": f"/srv/notes.{tok}/a.txt"}),
+            tool("Write", {"file_path": f"/srv/me@{tok}x/a.txt"}),
+            tool("Write", {"file_path": f"/srv/pw-{tok}!/a.txt"}),
+            tool(f"mcp__srv.{tok}__read", {}),
+            tool("Bash", {"command": "curl https://zk3j9qm2lp8xw4rt7y1.ngrok.io/x"}),
+        ))
+        text = self.out("--json")
+        self.assertNotIn(tok, text)
+        self.assertNotIn("zk3j9qm2lp8xw4rt7y1", text)
+
+    def test_which_lookups_are_capped(self):
+        from xova_scan import activity as act
+        act._WHICH.clear()
+        for i in range(act.MAX_WHICH + 50):
+            act._named_program(f"prog{i}name")
+        self.assertLessEqual(len(act._WHICH), act.MAX_WHICH)

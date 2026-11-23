@@ -19,7 +19,7 @@ xova-scan --json > ai-inventory.json
 - Agents set to act without asking (Claude Code bypass mode, Codex full-auto)
 - What the agents actually did: shell commands run, risky commands (rm -rf, force push, piping downloads to a shell, sudo, dropping tables), files changed and where, web hosts reached, MCP tools used, sub-agents started
 - Keys and tokens that ended up in AI chat logs (counted, never shown)
-- Only counts, program names, web hosts and folders are reported. Prompts, command arguments and file contents never are. Skip it with `--no-activity`.
+- Only counts, program names, web hosts and folders are reported. Prompts, command arguments and file contents never are. Skip it with `--no-activity`. Folder paths and web host names are shown as they are (they are local paths and domain names, not credentials); anything shaped like a key is redacted.
 
 **Starter rules**
 - `plaintext-ai-key-in-repo`: an AI key stored in plain text inside a git repository (with the command to confirm it can never be committed)
