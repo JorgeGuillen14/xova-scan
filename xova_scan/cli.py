@@ -99,6 +99,8 @@ def main(argv=None):
     p.add_argument("--rules", help="JSON rules file, e.g. {\"approved\": [\"Claude\", \"openai\"]}")
     p.add_argument("--json", action="store_true", help="print the report as JSON")
     p.add_argument("--no-activity", action="store_true", help="skip reading AI agents' local logs")
+    p.add_argument("--export-xova", metavar="DIR", help="write XOVA inventory import files (Not reviewed) to DIR")
+    p.add_argument("--team", help="XOVA department ID that will own the imported entries (required with --export-xova)")
     p.add_argument("--days", type=int, default=30, help="how many days of agent activity to read (default 30)")
     p.add_argument("--home", default=str(Path.home()), help=argparse.SUPPRESS)
     p.add_argument("--apps", default="/Applications", help=argparse.SUPPRESS)
@@ -113,6 +115,23 @@ def main(argv=None):
             return sys.exit(2)
     report = scan(home=a.home, apps_dir=a.apps, roots=a.roots or None, rules=rules,
                   with_activity=not a.no_activity, days=a.days)
+    if a.export_xova:
+        import datetime
+        import platform as _platform
+        from .export import to_xova
+        try:
+            docs = to_xova(report, team=a.team or "", added_on=datetime.date.today().isoformat(),
+                           machine=_platform.node() or "this-machine")
+        except ValueError as exc:
+            print(f"xova-scan: {exc}", file=sys.stderr)
+            return sys.exit(2)
+        out = Path(a.export_xova)
+        out.mkdir(parents=True, exist_ok=True)
+        for i, doc in enumerate(docs, 1):
+            path = out / f"xova-import-{i}.json"
+            path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+            print(f"wrote {path} ({len(doc['entries'])} entries): import it in XOVA under Inventory, Import")
+        return 0
     if a.json:
         print(json.dumps(report, indent=2))
     else:

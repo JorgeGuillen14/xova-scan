@@ -44,6 +44,13 @@ xova-scan --json > ai-inventory.json
 - It never reads a secret's value into the report, only the variable name (tested).
 - Everything starts as "Not reviewed". Finding nothing doesn't prove there's no AI.
 
+**Send it to XOVA**
+
+```sh
+python3 -m xova_scan.cli --export-xova ./xova-import --team <your XOVA department ID>
+```
+Writes XOVA inventory import files (25 systems per file). Every system arrives as Detected and Not reviewed. Nothing is approved and no owner is guessed. Same scan in, identical files out.
+
 Want this kept current across a whole team, mapped to the EU AI Act, NIST AI RMF and state AI laws, with audit-ready evidence? That's XOVA.
 
 Apache-2.0.
