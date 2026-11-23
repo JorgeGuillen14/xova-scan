@@ -3,8 +3,13 @@
 Find every AI tool on your machine and check it against your rules, in one command.
 
 ```sh
+# Needs only Python 3.11+ (no other dependencies)
+python3 -m pip install git+https://github.com/JorgeGuillen14/xova-scan
+python3 -m xova_scan.cli            # scans your home folder
+python3 -m xova_scan.cli ~/code     # or just one folder
+
+# If you use pipx:
 pipx run --spec git+https://github.com/JorgeGuillen14/xova-scan xova-scan
-# or: pipx install git+https://github.com/JorgeGuillen14/xova-scan && xova-scan
 xova-scan ~/code --rules rules.json
 xova-scan --json > ai-inventory.json
 ```
