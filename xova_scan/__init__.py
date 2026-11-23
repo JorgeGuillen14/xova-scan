@@ -414,7 +414,8 @@ def _scan_projects(roots, rep, home_sources=frozenset()):
         root_depth = len(root.parts)
         for dirpath, dirnames, filenames in os.walk(root, onerror=lambda e: rep.unreadable.append(str(e.filename))):
             d = Path(dirpath)
-            dirnames[:] = [n for n in dirnames if n not in SKIP_DIRS and (not n.startswith(".") or n in HIDDEN_ALLOWED)]
+            dirnames[:] = sorted(n for n in dirnames if n not in SKIP_DIRS and (not n.startswith(".") or n in HIDDEN_ALLOWED))
+            filenames = sorted(filenames)
             if len(d.parts) - root_depth >= MAX_DEPTH:
                 dirnames[:] = []
             for parts, client in PROJECT_MCP.items():
@@ -558,6 +559,11 @@ def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None, with_acti
                                    "JWT; obvious test values excluded) were pasted into or "
                                    "printed in AI chats, and the agent kept a copy in its local logs. Check them, rotate any real "
                                    "key, and clear old logs."})
+    # Deterministic output: one canonical order, independent of how the file system lists things.
+    kinds = ["mcp_server", "ai_app", "ai_cli", "ai_library", "api_key", "cloud_account"]
+    rep.found.sort(key=lambda f: (kinds.index(f["kind"]) if f["kind"] in kinds else 99, f["name"], f["where"]))
+    findings.sort(key=lambda f: (f["rule"], f["subject"], f.get("where", "")))
+    rep.unreadable = sorted(set(rep.unreadable))
     return {"tool": "xova-scan", "version": __version__, "note": NOTE, "found": rep.found,
             "reach": {k: sorted(v) for k, v in sorted(rep.reach.items())},
             "activity": act, "findings": findings, "unreadable": rep.unreadable, "roots": [str(r) for r in roots]}

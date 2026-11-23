@@ -236,19 +236,25 @@ def _read_lines(t, path, handler, unreadable):
         unreadable.append(str(path))
 
 
+def _ranked(counter, n=None):
+    """Counts high to low, ties broken by name, so equal counts always print in the same order."""
+    items = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+    return items[:n] if n else items
+
+
 def activity(home, token_shape, days=30, unreadable=None, desktop_logs=None):
     home = Path(home)
     unreadable = unreadable if unreadable is not None else []
     cutoff = time.time() - days * 86400
     t = _Tally(home, token_shape)
-    claude = list(_recent((home / ".claude/projects").glob("*/*.jsonl"), cutoff))
-    codex = list(_recent((home / ".codex/sessions").glob("**/*.jsonl"), cutoff))
+    claude = sorted(_recent((home / ".claude/projects").glob("*/*.jsonl"), cutoff))
+    codex = sorted(_recent((home / ".codex/sessions").glob("**/*.jsonl"), cutoff))
     t.sessions = len(claude) + len(codex)
     for p in claude:
         _read_lines(t, p, _claude_line, unreadable)
     for p in codex:
         _read_lines(t, p, _codex_line, unreadable)
-    for log in _recent(Path(desktop_logs or home / "Library/Logs/Claude").glob("mcp-server-*.log"), cutoff):
+    for log in sorted(_recent(Path(desktop_logs or home / "Library/Logs/Claude").glob("mcp-server-*.log"), cutoff)):
         from . import _safe
         server = _safe(log.name[len("mcp-server-"):-len(".log")])
         try:
@@ -263,14 +269,14 @@ def activity(home, token_shape, days=30, unreadable=None, desktop_logs=None):
         "days": days,
         "sessions": t.sessions,
         "shell_commands": t.shell,
-        "top_programs": dict((k, v) for k, v in t.programs.most_common(9) if k != "other"),
+        "top_programs": dict((k, v) for k, v in _ranked(t.programs, 9) if k != "other"),
         "unnamed_program_runs": t.programs.get("other", 0),
-        "risky_commands": dict(t.risky),
         "files_changed": len(t.files),
-        "top_folders": dict(t.folders.most_common(8)),
-        "web_domains": [h for h, _ in t.domains.most_common()],
+        "top_folders": dict(_ranked(t.folders, 8)),
+        "web_domains": [h for h, _ in _ranked(t.domains)],
         "web_searches": t.searches,
-        "mcp_tool_calls": dict(t.mcp.most_common()),
+        "mcp_tool_calls": dict(_ranked(t.mcp)),
+        "risky_commands": dict(_ranked(t.risky)),
         "subagents_started": t.subagents,
         "secrets_in_logs": len(t.secret_hashes),
         "secret_log_files": sorted(t.secret_files),

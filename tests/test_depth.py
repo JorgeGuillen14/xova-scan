@@ -259,3 +259,30 @@ class DepthReviewTwoTests(unittest.TestCase):
         for i in range(act.MAX_WHICH + 50):
             act._named_program(f"prog{i}name")
         self.assertLessEqual(len(act._WHICH), act.MAX_WHICH)
+
+
+class DeterminismTests(unittest.TestCase):
+    """Same machine state in, byte-identical report out, whatever order the file system lists things in."""
+
+    def test_report_is_identical_when_listing_order_changes(self):
+        base = DepthTests("test_capabilities_say_what_each_server_can_reach")
+        base.setUp()
+        self.addCleanup(base.tearDown)
+        for i in range(3):
+            write(base.home / f"code/p{i}/requirements.txt", "openai\nanthropic\n")
+            write(base.home / f"code/p{i}/.env", "OPENAI_API_KEY=x\nANTHROPIC_API_KEY=y\n")
+        first = json.dumps(base.run_scan(), sort_keys=False)
+        real_walk, real_glob = os.walk, Path.glob
+
+        def reversed_walk(top, *a, **k):
+            for d, dirs, files in real_walk(top, *a, **k):
+                dirs.reverse()
+                yield d, dirs, list(reversed(files))
+
+        def reversed_glob(self, pattern):
+            return iter(sorted(real_glob(self, pattern), reverse=True))
+
+        from unittest import mock
+        with mock.patch("os.walk", reversed_walk), mock.patch.object(Path, "glob", reversed_glob):
+            second = json.dumps(base.run_scan(), sort_keys=False)
+        self.assertEqual(first, second)
