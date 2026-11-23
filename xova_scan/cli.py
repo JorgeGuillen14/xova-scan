@@ -27,6 +27,10 @@ SEVERITY = ["agent-runs-without-asking", "secret-in-ai-logs", "no-secrets-in-mcp
 
 def _print(report):
     found, findings, act = report["found"], report["findings"], report.get("activity")
+    show_status = any(f["status"] != "Not reviewed" for f in found)  # only meaningful with an approved list
+
+    def tag(status):
+        return f"  [{status}]" if show_status else ""
     print(f"xova-scan {report['version']}: {_plural(len(found), 'AI item')} on this machine, "
           f"{_plural(len(findings), 'problem')}\n")
 
@@ -82,10 +86,10 @@ def _print(report):
                 groups.setdefault((f["name"], f["status"]), []).append(f["where"])
             for (name, status), wheres in groups.items():
                 where = wheres[0] if len(wheres) == 1 else _plural(len(wheres), "project")
-                print(f"  - {_c(name)}  [{status}]  {_c(where)}")
+                print(f"  - {_c(name)}{tag(status)}  {_c(where)}")
         else:
             for f in items:
-                print(f"  - {_c(f['name'])}  [{f['status']}]  {_c(f['where'])}")
+                print(f"  - {_c(f['name'])}{tag(f['status'])}  {_c(f['where'])}")
         print()
     print(f"All rule findings ({len(findings)})" if findings else "Rule findings: none")
     by_rule = {}

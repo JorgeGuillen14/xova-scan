@@ -311,3 +311,21 @@ class ReadabilityTests(unittest.TestCase):
             text = out.getvalue()
             self.assertIn("ANTHROPIC_API_KEY, MISTRAL_API_KEY, OPENAI_API_KEY", text)
             self.assertEqual(text.count("config for MCP server 't'"), 1)
+
+
+class StatusNoiseTests(unittest.TestCase):
+    def test_status_shows_only_when_an_approved_list_is_used(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            write(home / ".cursor/mcp.json", json.dumps({"mcpServers": {"pg": {"command": "uvx", "args": ["mcp-postgres==1"]}}}))
+            args = ["--no-activity", "--home", str(home), "--apps", "/none", str(home / "nocode")]
+            out = io.StringIO()
+            with redirect_stdout(out):
+                main(args)
+            self.assertNotIn("Not reviewed", out.getvalue())
+            rules = Path(tmp) / "r.json"
+            rules.write_text(json.dumps({"approved": ["pg"]}))
+            out = io.StringIO()
+            with redirect_stdout(out):
+                main(args + ["--rules", str(rules)])
+            self.assertIn("[Approved]", out.getvalue())
