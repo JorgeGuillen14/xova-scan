@@ -15,7 +15,7 @@ xova-scan --json > ai-inventory.json
 - AI API keys, by **name only**
 
 **Starter rules**
-- `no-plaintext-keys-in-git`: an AI key in a `.env` file that git doesn't ignore
+- `plaintext-ai-key-in-repo`: an AI key stored in plain text inside a git repository (with the command to confirm it can never be committed)
 - `no-secrets-in-mcp-config`: a secret pasted straight into an MCP server's config
 - `approved-tools-only`: anything not on your list, e.g. `{"approved": ["Claude", "openai", "github"]}`
 

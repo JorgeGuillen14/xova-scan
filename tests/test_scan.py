@@ -98,8 +98,8 @@ class ScanTests(unittest.TestCase):
         self.assertTrue(all(f["status"] == "Not reviewed" for f in r["found"]))
 
     def test_rule_key_in_unignored_env_file(self):
-        hit = [f for f in self.run_scan()["findings"] if f["rule"] == "no-plaintext-keys-in-git"]
-        self.assertEqual([f["subject"] for f in hit], ["OPENAI_API_KEY"])  # api/.env is git-ignored
+        hit = sorted(f["subject"] for f in self.run_scan()["findings"] if f["rule"] == "plaintext-ai-key-in-repo")
+        self.assertEqual(hit, ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"])  # flagged even when git-ignored: never claim safe
 
     def test_rule_secret_inline_in_mcp_config(self):
         hit = [f["subject"] for f in self.run_scan()["findings"] if f["rule"] == "no-secrets-in-mcp-config"]
@@ -192,25 +192,25 @@ class HostileInputTests(unittest.TestCase):
         self.git_repo(self.code / "r")
         write(self.code / "r/.gitignore", ".env*\n")
         write(self.code / "r/prod.env", "OPENAI_API_KEY=x\n")
-        hit = [f["where"] for f in self.run_scan()["findings"] if f["rule"] == "no-plaintext-keys-in-git"]
+        hit = [f["where"] for f in self.run_scan()["findings"] if f["rule"] == "plaintext-ai-key-in-repo"]
         self.assertTrue(any(h.endswith("prod.env") for h in hit))
 
     def test_gitignore_negation_is_respected(self):
         self.git_repo(self.code / "n")
         write(self.code / "n/.gitignore", ".env\n!.env\n")
         write(self.code / "n/.env", "OPENAI_API_KEY=x\n")
-        self.assertTrue([f for f in self.run_scan()["findings"] if f["rule"] == "no-plaintext-keys-in-git"])
+        self.assertTrue([f for f in self.run_scan()["findings"] if f["rule"] == "plaintext-ai-key-in-repo"])
 
     def test_env_in_subfolder_of_repo_is_checked(self):
         self.git_repo(self.code / "b")
         write(self.code / "b/sub/.env", "OPENAI_API_KEY=x\n")
-        self.assertTrue([f for f in self.run_scan()["findings"] if f["rule"] == "no-plaintext-keys-in-git"])
+        self.assertTrue([f for f in self.run_scan()["findings"] if f["rule"] == "plaintext-ai-key-in-repo"])
 
     def test_env_example_templates_are_not_flagged(self):
         self.git_repo(self.code / "t")
         write(self.code / "t/.env.example", "OPENAI_API_KEY=\n")
         write(self.code / "t/.env.sample", "OPENAI_API_KEY=\n")
-        self.assertFalse([f for f in self.run_scan()["findings"] if f["rule"] == "no-plaintext-keys-in-git"])
+        self.assertFalse([f for f in self.run_scan()["findings"] if f["rule"] == "plaintext-ai-key-in-repo"])
 
     def test_more_mcp_locations(self):
         write(self.code / "p/.mcp.json", json.dumps({"mcpServers": {"projsrv": {"command": "npx"}}}))
@@ -276,25 +276,7 @@ class ReviewTwoTests(unittest.TestCase):
              mock.patch.object(subprocess, "Popen", side_effect=AssertionError("ran a program")), \
              mock.patch.object(os, "system", side_effect=AssertionError("ran a program")):
             r = self.run_scan()
-        self.assertTrue([f for f in r["findings"] if f["rule"] == "no-plaintext-keys-in-git"])
-
-    def test_gitignore_rules_read_without_git(self):
-        repo = self.code / "g"
-        (repo / ".git/info").mkdir(parents=True)
-        write(repo / ".git/HEAD", "ref: refs/heads/main\n")
-        write(repo / ".gitignore", "# c\n.env\nsecrets/\n/root.env\n")
-        write(repo / ".env", "OPENAI_API_KEY=x\n")             # ignored
-        write(repo / "secrets/.env", "OPENAI_API_KEY=x\n")     # ignored (dir)
-        write(repo / "root.env", "OPENAI_API_KEY=x\n")         # ignored (anchored)
-        write(repo / "sub/root.env", "OPENAI_API_KEY=x\n")     # NOT ignored (anchor)
-        write(repo / "sub/.gitignore", "!.env\n")
-        write(repo / "sub/.env", "OPENAI_API_KEY=x\n")         # NOT ignored (negated)
-        write(repo / ".git/info/exclude", "local.env\n")
-        write(repo / "local.env", "OPENAI_API_KEY=x\n")        # ignored (info/exclude)
-        hit = sorted(Path(f["where"]).relative_to(repo).as_posix() for f in self.run_scan()["findings"]
-                     if f["rule"] == "no-plaintext-keys-in-git")
-        # Only exact literal rules count as proof; info/exclude is not read, so local.env is (safely) warned about.
-        self.assertEqual(hit, ["local.env", "sub/.env", "sub/root.env"])
+        self.assertTrue([f for f in r["findings"] if f["rule"] == "plaintext-ai-key-in-repo"])
 
     def test_env_references_are_not_secrets(self):
         self.cursor({"a": {"url": "https://h", "headers": {"Authorization": "Bearer ${X}"}},
@@ -347,62 +329,29 @@ class ReviewThreeTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def flagged(self):
-        r = scan(home=self.code.parent, apps_dir=Path(self.tmp.name) / "none", roots=[self.code])
-        return sorted(Path(f["where"]).relative_to(self.code).as_posix() for f in r["findings"]
-                      if f["rule"] == "no-plaintext-keys-in-git")
+    def flagged(self, root=None):
+        r = scan(home=self.code.parent, apps_dir=Path(self.tmp.name) / "none", roots=[root or self.code])
+        return [f for f in r["findings"] if f["rule"] == "plaintext-ai-key-in-repo"]
 
-    def repo(self, name, gitignore: bytes):
-        r = self.code / name
+    def test_ignored_key_file_is_still_flagged_with_a_check_command(self):
+        r = self.code / "w"
         subprocess.run(["git", "init", "-q", str(r)], check=True)
-        (r / ".gitignore").write_bytes(gitignore)
-        return r
-
-    def key(self, path):
-        write(path, "OPENAI_API_KEY=x\n")
-
-    def test_wildcards_are_never_proof(self):
-        r = self.repo("w", b"/*.env\n")
-        self.key(r / "config/prod.env")
-        r2 = self.repo("w2", b".en[^v]\n")
-        self.key(r2 / ".env")
-        self.assertEqual(self.flagged(), ["w/config/prod.env", "w2/.env"])
-
-    def test_line_tricks_are_never_proof(self):
-        for name, data in [("cr", b"#c\r.env\n"), ("ff", b"#c\x0c.env\n"), ("tab", b".env\t\n"),
-                           ("bad", b".e\xffnv\n")]:
-            self.key(self.repo(name, data) / ".env")
-        self.assertEqual(self.flagged(), ["bad/.env", "cr/.env", "ff/.env", "tab/.env"])
-
-    def test_crlf_literal_is_proof(self):
-        self.key(self.repo("crlf", b".env\r\n") / ".env")
-        self.assertEqual(self.flagged(), [])
-
-    def test_symlinked_gitignore_is_never_proof(self):
-        r = self.code / "s"
-        subprocess.run(["git", "init", "-q", str(r)], check=True)
-        (self.code / "real.gitignore").write_text(".env\n")
-        os.symlink(self.code / "real.gitignore", r / ".gitignore")
-        self.key(r / ".env")
-        self.assertEqual(self.flagged(), ["s/.env"])
-
-    def test_fake_nested_git_does_not_hide(self):
-        r = self.repo("n", b"")
-        (r / "sub/.git/info").mkdir(parents=True)
-        (r / "sub/.git/info/exclude").write_text(".env\n")
-        (r / "sub/.gitignore").write_text(".env\n")
-        self.key(r / "sub/.env")
-        # sub/.git is not a real repo, so the outer repo rules apply; sub/.gitignore literal still counts there
-        self.assertEqual(self.flagged(), [])
-        (r / "sub/.gitignore").unlink()
-        self.assertEqual(self.flagged(), ["n/sub/.env"])
-
-    def test_already_committed_file_is_flagged(self):
-        r = self.repo("t", b"")
-        self.key(r / ".env")
-        subprocess.run(["git", "-C", str(r), "add", "-f", ".env"], check=True)
         (r / ".gitignore").write_text(".env\n")
-        self.assertEqual(self.flagged(), ["t/.env"])
+        write(r / ".env", "OPENAI_API_KEY=x\n")
+        hit = self.flagged()
+        self.assertEqual(len(hit), 1)
+        self.assertIn("git check-ignore", hit[0]["why"])
+        self.assertNotIn("safe", hit[0]["why"].lower())
+
+    def test_scan_folder_below_repo_root_still_flags(self):
+        r = self.code / "deep"
+        subprocess.run(["git", "init", "-q", str(r)], check=True)
+        write(r / "a/b/.env", "OPENAI_API_KEY=x\n")
+        self.assertEqual(len(self.flagged(root=r / "a/b")), 1)
+
+    def test_key_outside_any_repo_is_listed_not_flagged(self):
+        write(self.code / "loose/.env", "OPENAI_API_KEY=x\n")
+        self.assertEqual(self.flagged(), [])
 
     def test_deep_nesting_does_not_crash(self):
         write(self.code / "p/.mcp.json", "[" * 200000)
