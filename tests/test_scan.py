@@ -316,7 +316,7 @@ class ReviewTwoTests(unittest.TestCase):
         self.assertIn("1 problem", first)
         self.assertEqual(text.count("  - mcp "), 1)
         self.assertIn("3 projects", text)
-        self.assertIn(".cursor/mcp.json", text.split("Rule findings")[1])
+        self.assertIn(".cursor/mcp.json", text.split("All rule findings")[1])
 
 
 class ReviewThreeTests(unittest.TestCase):

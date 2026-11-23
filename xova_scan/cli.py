@@ -20,10 +20,50 @@ def _plural(n, word):
     return f"{n} {word}" + ("" if n == 1 else "s")
 
 
+SEVERITY = ["agent-runs-without-asking", "secret-in-ai-logs", "no-secrets-in-mcp-config", "plaintext-ai-key-in-repo",
+            "unpinned-mcp-server", "approved-tools-only"]
+
+
 def _print(report):
-    found, findings = report["found"], report["findings"]
+    found, findings, act = report["found"], report["findings"], report.get("activity")
     print(f"xova-scan {report['version']}: {_plural(len(found), 'AI item')} on this machine, "
           f"{_plural(len(findings), 'problem')}\n")
+
+    if report.get("reach"):
+        print("What your AI can reach")
+        for cap, names in report["reach"].items():
+            print(f"  - {cap}: {_c(', '.join(names))}")
+        print()
+
+    if act:
+        print(f"What your AI did in the last {act['days']} days ({_plural(act['sessions'], 'agent session')})")
+        progs = ", ".join(f"{_c(k)} {v}" for k, v in act["top_programs"].items())
+        print(f"  - ran {act['shell_commands']} shell commands" + (f" (most: {progs})" if progs else ""))
+        if act["risky_commands"]:
+            print("  - risky commands: " + ", ".join(f"{k} x{v}" for k, v in act["risky_commands"].items()))
+        folders = ", ".join(_c(k) for k in list(act["top_folders"])[:5])
+        print(f"  - changed {act['files_changed']} files" + (f" (mostly in {folders})" if folders else ""))
+        if act["web_domains"] or act["web_searches"]:
+            hosts = act["web_domains"]
+            shown = ", ".join(_c(h) for h in hosts[:8]) + (f" and {len(hosts) - 8} more" if len(hosts) > 8 else "")
+            print(f"  - reached {_plural(len(hosts), 'web host')}" + (f": {shown}" if hosts else "") +
+                  (f"; ran {act['web_searches']} web searches" if act["web_searches"] else ""))
+        if act["mcp_tool_calls"]:
+            print("  - used tools through MCP: " + ", ".join(f"{_c(k)} {v}" for k, v in act["mcp_tool_calls"].items()))
+        if act["subagents_started"]:
+            print(f"  - started {act['subagents_started']} sub-agents")
+        if act["secrets_in_logs"]:
+            n = act["secrets_in_logs"]
+            print(f"  - {n} unique {'key or token sits' if n == 1 else 'keys or tokens sit'} in its chat logs")
+        print()
+
+    if findings:
+        ranked = sorted(findings, key=lambda f: SEVERITY.index(f["rule"]) if f["rule"] in SEVERITY else 99)
+        print("Fix first")
+        for i, f in enumerate(ranked[:3], 1):
+            print(f"  {i}. {_c(f['subject'])}: {_c(f['why'])}")
+        print()
+
     for kind, label in LABELS.items():
         items = [f for f in found if f["kind"] == kind]
         if not items:
@@ -40,14 +80,14 @@ def _print(report):
             for f in items:
                 print(f"  - {_c(f['name'])}  [{f['status']}]  {_c(f['where'])}")
         print()
-    print(f"Rule findings ({len(findings)})" if findings else "Rule findings: none")
+    print(f"All rule findings ({len(findings)})" if findings else "Rule findings: none")
     for f in findings:
         print(f"  ! {f['rule']}: {_c(f['subject'])}  {_c(f['why'])}")
         if f.get("where"):
             print(f"      in {_c(f['where'])}")
     if report["unreadable"]:
         print("\nCould not read (not proof of no AI):")
-        for u in report["unreadable"]:
+        for u in report["unreadable"][:20]:
             print(f"  ? {_c(u)}")
     print(f"\n{report['note']}")
 
@@ -57,6 +97,8 @@ def main(argv=None):
     p.add_argument("roots", nargs="*", help="folders to search for code (default: your home folder)")
     p.add_argument("--rules", help="JSON rules file, e.g. {\"approved\": [\"Claude\", \"openai\"]}")
     p.add_argument("--json", action="store_true", help="print the report as JSON")
+    p.add_argument("--no-activity", action="store_true", help="skip reading AI agents' local logs")
+    p.add_argument("--days", type=int, default=30, help="how many days of agent activity to read (default 30)")
     p.add_argument("--home", default=str(Path.home()), help=argparse.SUPPRESS)
     p.add_argument("--apps", default="/Applications", help=argparse.SUPPRESS)
     p.add_argument("--version", action="version", version=__version__)
@@ -68,7 +110,8 @@ def main(argv=None):
         except (OSError, ValueError) as exc:
             print(f"xova-scan: bad rules file {a.rules}: {exc}", file=sys.stderr)
             return sys.exit(2)
-    report = scan(home=a.home, apps_dir=a.apps, roots=a.roots or None, rules=rules)
+    report = scan(home=a.home, apps_dir=a.apps, roots=a.roots or None, rules=rules,
+                  with_activity=not a.no_activity, days=a.days)
     if a.json:
         print(json.dumps(report, indent=2))
     else:

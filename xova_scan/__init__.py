@@ -14,7 +14,7 @@ import tomllib
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 NOTE = ("Local scan only. Nothing left this machine. Secret values were never read into the report. "
         "Finding nothing does not prove there is no AI here.")
@@ -54,6 +54,47 @@ SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "env", "__pycache__", "sit
 HIDDEN_ALLOWED = {".vscode", ".cursor", ".config"}
 PROJECT_MCP = {(".mcp.json",): "Claude Code (project)", (".vscode", "mcp.json"): "VS Code (project)",
                (".cursor", "mcp.json"): "Cursor (project)"}
+
+
+CAPABILITIES = [  # (what it can reach, words in the server name or package). Checked in order; first match wins.
+    ("your whole desktop", ("computer-use", "computer_use", "computeruse")),
+    ("run any command", ("node_repl", "shell", "terminal", "desktop-commander", "exec", "repl", "ssh")),
+    ("code repositories", ("github", "gitlab", "bitbucket", "server-git")),
+    ("databases", ("supabase", "postgres", "mysql", "sqlite", "mongo", "redis", "neon", "database", "sql",
+                   "bigquery", "snowflake", "airtable", "firebase")),
+    ("web browser", ("playwright", "puppeteer", "chrome-devtools", "browser", "selenium")),
+    ("messages and email", ("slack", "gmail", "discord", "outlook", "teams", "email", "telegram", "whatsapp")),
+    ("files on this machine", ("filesystem", "obsidian", "server-fs", "notes", "drive", "dropbox")),
+    ("the web", ("firecrawl", "perplexity", "fetch", "brave", "search", "context7", "exa", "tavily", "glif")),
+    ("cloud and sites", ("webflow", "figma", "vercel", "aws", "azure", "gcp", "cloudflare", "netlify", "stripe",
+                         "shopify", "blender", "notion", "linear", "jira", "atlassian")),
+]
+RUNNERS = {"npx", "bunx", "pnpx", "uvx", "pipx"}
+
+
+def _capability(name: str, args) -> str:
+    hay = " ".join([name] + [a for a in (args if isinstance(args, list) else []) if isinstance(a, str)]).lower()
+    for label, words in CAPABILITIES:
+        if any(w in hay for w in words):
+            return label
+    return "other tools"
+
+
+def _unpinned(program: str, args) -> bool:
+    """A runner (npx, uvx, ...) that fetches a package without an exact version gets new code on every launch."""
+    if program not in RUNNERS or not isinstance(args, list):
+        return False
+    pkgs = [a for a in args if isinstance(a, str) and not a.startswith("-")]
+    if not pkgs:
+        return False
+    pkg = pkgs[0]
+    if program in ("uvx", "pipx"):
+        return "==" not in pkg and not re.search(r"@\d", pkg)
+    body = pkg[1:] if pkg.startswith("@") else pkg
+    if "@" not in body:
+        return True
+    version = body.rsplit("@", 1)[1]
+    return version in ("latest", "next", "") or not re.match(r"\d", version)
 
 
 class _Unreadable(Exception):
@@ -172,6 +213,7 @@ def _command_target(cmd, args):
 class _Report:
     def __init__(self):
         self.found, self.unreadable, self.inline_secrets, self.exposed_keys = [], [], set(), []
+        self.reach, self.unpinned, self.auto_agents = {}, set(), []
         self._seen = set()
 
     def add(self, kind, name, where, **extra):
@@ -196,6 +238,12 @@ def _scan_mcp_file(client, path, rep):
         else:
             target, secret = _command_target(cfg.get("command"), cfg.get("args"))
         rep.add("mcp_server", _safe(name), where, runs=_safe(target))
+        args = cfg.get("args")
+        if isinstance(cfg.get("command"), dict):
+            args = cfg["command"].get("args", args)
+        rep.reach.setdefault(_capability(str(name), args), set()).add(_safe(name))
+        if not isinstance(cfg.get("url"), str) and _unpinned(target, args):
+            rep.unpinned.add(_safe(name))
         if secret:
             rep.inline_secrets.add(_safe(name))
         for block in ("env", "headers"):
@@ -319,8 +367,42 @@ def _scan_projects(roots, rep, home_sources=frozenset()):
                             rep.exposed_keys.append((key, str(p)))
 
 
+def _posture(home: Path, rep):
+    """Agents set to act without asking: Claude Code bypass/allow-all, Codex never-ask with full disk access."""
+    for path in (home / ".claude/settings.json", home / ".claude/settings.local.json"):
+        try:
+            data = json.loads(_read(path)) if path.exists() else {}
+        except (_Unreadable, ValueError, RecursionError):
+            rep.unreadable.append(str(path))
+            continue
+        perms = data.get("permissions") if isinstance(data, dict) and isinstance(data.get("permissions"), dict) else {}
+        allow = perms.get("allow") if isinstance(perms.get("allow"), list) else []
+        if perms.get("defaultMode") == "bypassPermissions" or data.get("skipDangerousModePermissionPrompt") is True \
+                or any(a in ("Bash", "Bash(*)", "Bash(:*)", "Bash(**)") for a in allow):
+            rep.auto_agents.append(("Claude Code", str(path)))
+            break
+    codex = home / ".codex/config.toml"
+    try:
+        data = tomllib.loads(_read(codex)) if codex.exists() else {}
+    except (_Unreadable, ValueError, RecursionError, tomllib.TOMLDecodeError):
+        rep.unreadable.append(str(codex))
+        data = {}
+    if data.get("approval_policy") == "never" and data.get("sandbox_mode") == "danger-full-access":
+        rep.auto_agents.append(("Codex", str(codex)))
+    for agent, _ in rep.auto_agents:
+        rep.reach.setdefault("run any command", set()).add(agent)
+
+
 def _check(rep, rules):
     findings = []
+    for agent, path in rep.auto_agents:
+        findings.append({"rule": "agent-runs-without-asking", "subject": agent, "where": path,
+                         "why": "This AI agent runs commands and changes files without asking first. One bad prompt or "
+                                "poisoned web page can act with your full access. Turn approvals back on."})
+    for server in sorted(rep.unpinned):
+        findings.append({"rule": "unpinned-mcp-server", "subject": server,
+                         "why": "This MCP server downloads its latest code every time it starts. Pin an exact version "
+                                "so new code can't arrive unreviewed."})
     for key, path in rep.exposed_keys:
         findings.append({"rule": "plaintext-ai-key-in-repo", "subject": key, "where": path,
                          "why": "An AI key is stored in plain text inside a git repository. Confirm it can never be "
@@ -358,7 +440,7 @@ def validate_rules(rules):
     return rules
 
 
-def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None):
+def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None, with_activity=True, days=30):
     home = Path(home)
     rules = validate_rules(rules)
     roots = [Path(r) for r in (roots or [home])]
@@ -368,6 +450,19 @@ def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None):
             _scan_mcp_file(client, path, rep)
     _scan_apps(Path(apps_dir), rep)
     _scan_projects(roots, rep, {p for _, p in _home_mcp_sources(home)})
+    _posture(home, rep)
+    act = None
+    if with_activity:
+        from .activity import activity
+        act = activity(home, TOKEN_SHAPE, days=days, unreadable=rep.unreadable)
     findings = _check(rep, rules)
+    if act and act["secrets_in_logs"]:
+        files = act["secret_log_files"]
+        findings.insert(0, {"rule": "secret-in-ai-logs", "subject": f"{act['secrets_in_logs']} unique keys or tokens in {len(files)} AI log files",
+                            "where": ", ".join(files[:3]) + (f" and {len(files) - 3} more" if len(files) > 3 else ""),
+                            "why": "Strings shaped like real keys or tokens (obvious test values excluded) were pasted into or "
+                                   "printed in AI chats, and the agent kept a copy in its local logs. Check them, rotate any real "
+                                   "key, and clear old logs."})
     return {"tool": "xova-scan", "version": __version__, "note": NOTE, "found": rep.found,
-            "findings": findings, "unreadable": rep.unreadable, "roots": [str(r) for r in roots]}
+            "reach": {k: sorted(v) for k, v in sorted(rep.reach.items())},
+            "activity": act, "findings": findings, "unreadable": rep.unreadable, "roots": [str(r) for r in roots]}

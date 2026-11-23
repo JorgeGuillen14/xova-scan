@@ -14,9 +14,19 @@ xova-scan --json > ai-inventory.json
 - AI libraries in your code (OpenAI, Anthropic, LangChain, MCP SDKs and more), across every project
 - AI API keys, by **name only**
 
+**What your AI can reach and what it did** (from the agents' own local logs, last 30 days)
+- What each AI tool can touch: your files, databases, code repositories, web browser, whole desktop, any command
+- Agents set to act without asking (Claude Code bypass mode, Codex full-auto)
+- What the agents actually did: shell commands run, risky commands (rm -rf, force push, piping downloads to a shell, sudo, dropping tables), files changed and where, web hosts reached, MCP tools used, sub-agents started
+- Keys and tokens that ended up in AI chat logs (counted, never shown)
+- Only counts, program names, web hosts and folders are reported. Prompts, command arguments and file contents never are. Skip it with `--no-activity`.
+
 **Starter rules**
 - `plaintext-ai-key-in-repo`: an AI key stored in plain text inside a git repository (with the command to confirm it can never be committed)
 - `no-secrets-in-mcp-config`: a secret pasted straight into an MCP server's config
+- `agent-runs-without-asking`: an AI agent that runs commands and edits files with approvals turned off
+- `secret-in-ai-logs`: real-looking keys or tokens sitting in AI agents' chat logs
+- `unpinned-mcp-server`: an MCP server that downloads its latest code on every start
 - `approved-tools-only`: anything not on your list, e.g. `{"approved": ["Claude", "openai", "github"]}`
 
 **Safe by design**
