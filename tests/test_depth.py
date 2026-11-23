@@ -141,3 +141,64 @@ class DepthTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DepthHostileTests(unittest.TestCase):
+    """Review of v0.2: no crash on deep JSON; no secrets via program, host, folder or server names; no symlink reads."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name) / "home"
+        self.proj = self.home / ".claude/projects/-p"
+        self.proj.mkdir(parents=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_json(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            main(["--json", "--home", str(self.home), "--apps", "/none", str(self.home / "nocode")])
+        return out.getvalue()
+
+    def test_deep_json_line_does_not_crash(self):
+        write(self.proj / "deep.jsonl", '{"t":"tool_use","a":' + "[" * 200000 + "]" * 200000 + "}\n")
+        write(self.home / ".codex/sessions/2026/01/01/r.jsonl", '{"custom_tool_call":' + "[" * 200000 + "]" * 200000 + "}\n")
+        self.assertIn('"activity"', self.run_json())
+
+    def test_secrets_never_surface_through_names(self):
+        write(self.proj / "s.jsonl", jl(
+            tool("Bash", {"command": "AKIAIOSFODNN7SECRETQ1 --x"}),
+            tool("Bash", {"command": "Hunter2Password --x"}),
+            tool("Bash", {"command": "'Pr1vate note to self' | wc"}),
+            tool("Bash", {"command": "curl https://alice.smith:hunter2@corp.com/x https://a8f3k2m9q7z1x5v4secretvalue99.ngrok.io/"}),
+            tool("Write", {"file_path": "/Volumes/AcmeMergerProject/AKIAIOSFODNN7SECRETQ2/notes.txt"}),
+            tool("Write", {"file_path": str(self.home / "sk_live_9f8a7b6c5d4e3f2a/proj/a.py")}),
+            tool("mcp__AKIAIOSFODNN7SECRETQ3__read", {}),
+        ))
+        text = self.run_json()
+        for leak in ("SECRETQ1", "Hunter2Password", "Pr1vate", "alice.smith", "hunter2", "secretvalue99", "SECRETQ2",
+                     "sk_live_9f8a7b6c5d4e3f2a", "SECRETQ3"):
+            self.assertNotIn(leak, text)
+        act = json.loads(text)["activity"]
+        self.assertIn("corp.com", act["web_domains"])
+        self.assertIn("wc", act["top_programs"])
+
+    def test_common_key_formats_are_counted(self):
+        write(self.proj / "k.jsonl", "AKIAIOSFODNN7Q8W2E4R and sk_live_9f8a7b6c5d4e3f2a1b0c\n")
+        self.assertEqual(json.loads(self.run_json())["activity"]["secrets_in_logs"], 2)
+
+    def test_symlinked_log_outside_agent_folder_is_not_read(self):
+        outside = write(Path(self.tmp.name) / "outside.txt", "sk-ant-api03-q8Rv2LmW7xKp4TzN9cYbH3fJ\n")
+        os.symlink(outside, self.proj / "link.jsonl")
+        text = self.run_json()
+        self.assertEqual(json.loads(text)["activity"]["secrets_in_logs"], 0)
+        self.assertNotIn("outside.txt", text)
+
+    def test_capabilities_match_whole_words(self):
+        write(self.home / ".cursor/mcp.json", json.dumps({"mcpServers": {
+            "replicate": {"command": "npx", "args": ["replicate-mcp@1.0.0"]},
+            "executive-briefing": {"command": "npx", "args": ["briefing@1.0.0"]}}}))
+        reach = json.loads(self.run_json())["reach"]
+        self.assertNotIn("replicate", reach.get("run any command", []))
+        self.assertNotIn("executive-briefing", reach.get("run any command", []))

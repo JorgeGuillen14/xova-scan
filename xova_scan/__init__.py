@@ -45,7 +45,8 @@ AI_KEY_HINT = re.compile(r"OPENAI|ANTHROPIC|CLAUDE|GEMINI|GOOGLE_API|MISTRAL|COH
                          r"LANGSMITH|PINECONE|ELEVENLABS|FIREWORKS|VOYAGE")
 SECRET_FLAG = re.compile(r"^--?(api[-_]?key|token|access[-_]?token|secret|password|auth|key|bearer)(=|$)", re.I)
 TOKEN_SHAPE = re.compile(r"(?<![A-Za-z0-9])(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|"
-                         r"xox[abprs]-[A-Za-z0-9-]{8,}|AIza[0-9A-Za-z_-]{8,}|glpat-[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{10,})")
+                         r"xox[abprs]-[A-Za-z0-9-]{8,}|AIza[0-9A-Za-z_-]{8,}|glpat-[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{10,}|"
+                         r"A[KS]IA[0-9A-Z]{16}|[rs]k_(?:live|test)_[0-9A-Za-z]{10,})")
 RANDOM_SHAPE = re.compile(r"^(?=.*[0-9])(?=.*[A-Za-z])[A-Za-z0-9_\-+/=]{20,}$")
 TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist", ".tmpl")
 
@@ -72,10 +73,18 @@ CAPABILITIES = [  # (what it can reach, words in the server name or package). Ch
 RUNNERS = {"npx", "bunx", "pnpx", "uvx", "pipx"}
 
 
+def _word(w: str):
+    return re.compile(r"(?<![a-z0-9])" + re.escape(w).replace("\\-", "[-_]").replace("_", "[-_]") + r"(?![a-z0-9])")
+
+
+CAPABILITY_RX = [(label, [_word(w) for w in words]) for label, words in CAPABILITIES]
+
+
 def _capability(name: str, args) -> str:
+    """Whole-word match, so 'replicate' is not 'repl' and 'executive' is not 'exec'."""
     hay = " ".join([name] + [a for a in (args if isinstance(args, list) else []) if isinstance(a, str)]).lower()
-    for label, words in CAPABILITIES:
-        if any(w in hay for w in words):
+    for label, patterns in CAPABILITY_RX:
+        if any(p.search(hay) for p in patterns):
             return label
     return "other tools"
 
@@ -460,7 +469,8 @@ def scan(home, apps_dir=Path("/Applications"), roots=None, rules=None, with_acti
         files = act["secret_log_files"]
         findings.insert(0, {"rule": "secret-in-ai-logs", "subject": f"{act['secrets_in_logs']} unique keys or tokens in {len(files)} AI log files",
                             "where": ", ".join(files[:3]) + (f" and {len(files) - 3} more" if len(files) > 3 else ""),
-                            "why": "Strings shaped like real keys or tokens (obvious test values excluded) were pasted into or "
+                            "why": "Strings shaped like real keys or tokens (OpenAI/Anthropic sk-, GitHub, Slack, Google, GitLab, AWS, Stripe, "
+                                   "JWT; obvious test values excluded) were pasted into or "
                                    "printed in AI chats, and the agent kept a copy in its local logs. Check them, rotate any real "
                                    "key, and clear old logs."})
     return {"tool": "xova-scan", "version": __version__, "note": NOTE, "found": rep.found,
