@@ -8,6 +8,14 @@ from . import scan, validate_rules, __version__
 LABELS = {"mcp_server": "MCP servers", "ai_app": "AI apps", "ai_library": "AI libraries in code", "api_key": "AI keys (names only)"}
 
 
+_CONTROL = {c: f"\\x{c:02x}" for c in [*range(32), 127, *range(128, 160)]}
+
+
+def _c(value):
+    """Terminal view only: control characters from file names are shown escaped, so they can't forge lines."""
+    return str(value).translate(_CONTROL)
+
+
 def _plural(n, word):
     return f"{n} {word}" + ("" if n == 1 else "s")
 
@@ -27,20 +35,20 @@ def _print(report):
                 groups.setdefault((f["name"], f["status"]), []).append(f["where"])
             for (name, status), wheres in groups.items():
                 where = wheres[0] if len(wheres) == 1 else _plural(len(wheres), "project")
-                print(f"  - {name}  [{status}]  {where}")
+                print(f"  - {_c(name)}  [{status}]  {_c(where)}")
         else:
             for f in items:
-                print(f"  - {f['name']}  [{f['status']}]  {f['where']}")
+                print(f"  - {_c(f['name'])}  [{f['status']}]  {_c(f['where'])}")
         print()
     print(f"Rule findings ({len(findings)})" if findings else "Rule findings: none")
     for f in findings:
-        print(f"  ! {f['rule']}: {f['subject']}  {f['why']}")
+        print(f"  ! {f['rule']}: {_c(f['subject'])}  {_c(f['why'])}")
         if f.get("where"):
-            print(f"      in {f['where']}")
+            print(f"      in {_c(f['where'])}")
     if report["unreadable"]:
         print("\nCould not read (not proof of no AI):")
         for u in report["unreadable"]:
-            print(f"  ? {u}")
+            print(f"  ? {_c(u)}")
     print(f"\n{report['note']}")
 
 

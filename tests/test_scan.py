@@ -1,4 +1,5 @@
 import io
+import re
 import os
 import subprocess
 import threading
@@ -359,6 +360,43 @@ class ReviewThreeTests(unittest.TestCase):
         write(self.code / "r/pyproject.toml", "a = " + "[" * 100000 + "]" * 100000 + "\n")
         r = scan(home=self.code.parent, apps_dir=Path(self.tmp.name) / "none", roots=[self.code])
         self.assertTrue(any("package.json" in u for u in r["unreadable"]))
+
+
+class ReviewFiveTests(unittest.TestCase):
+    """Hostile folder names: the suggested command must be safe to paste; the terminal view can't be forged."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.code = Path(self.tmp.name) / "home/code"
+        self.repo = self.code / "r"
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_suggested_command_is_safe_to_paste(self):
+        for name in ["sub$(touch PWNED)", 'q"; touch PWNED2; "', "x`touch PWNED3`"]:
+            write(self.repo / name / ".env", "OPENAI_API_KEY=x\n")
+        r = scan(home=self.code.parent, apps_dir=Path(self.tmp.name) / "none", roots=[self.code])
+        cmds = [re.search(r"git check-ignore -v (.+?) must print", f["why"]).group(1) for f in r["findings"]]
+        self.assertEqual(len(cmds), 3)
+        work = Path(self.tmp.name) / "paste"
+        work.mkdir()
+        for c in cmds:
+            subprocess.run(["bash", "-c", f"printf '%s' {c} >/dev/null"], cwd=work, check=True)
+        self.assertEqual(list(work.iterdir()), [])
+
+    def test_terminal_view_cannot_be_forged(self):
+        write(self.repo / "nl\n  ! plaintext-ai-key-in-repo: FORGED  fake" / ".env", "OPENAI_API_KEY=x\n")
+        write(self.repo / "ansi\x1b[2J" / ".env", "OPENAI_API_KEY=x\n")
+        write(self.repo / "cr\rOVERWRITE" / ".env", "OPENAI_API_KEY=x\n")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            main(["--home", str(self.code.parent), "--apps", str(Path(self.tmp.name) / "none"), str(self.code)])
+        text = out.getvalue()
+        self.assertNotIn("\x1b", text)
+        self.assertNotIn("\r", text)
+        self.assertFalse([l for l in text.splitlines() if l.lstrip().startswith("! plaintext-ai-key-in-repo: FORGED")])
 
 
 if __name__ == "__main__":

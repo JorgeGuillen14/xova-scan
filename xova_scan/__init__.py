@@ -8,6 +8,7 @@ another program (not even git).
 import json
 import os
 import re
+import shlex
 import stat
 import tomllib
 from pathlib import Path
@@ -323,7 +324,7 @@ def _check(rep, rules):
     for key, path in rep.exposed_keys:
         findings.append({"rule": "plaintext-ai-key-in-repo", "subject": key, "where": path,
                          "why": "An AI key is stored in plain text inside a git repository. Confirm it can never be "
-                                f"committed: git check-ignore -v \"{path}\" must print a rule, and "
+                                f"committed: git check-ignore -v {shlex.quote(path)} must print a rule, and "
                                 "git ls-files must not list it. Better: use a secrets manager."})
     server_where = {}
     for f in rep.found:
