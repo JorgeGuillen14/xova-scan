@@ -110,39 +110,60 @@ def _unpinned(program: str, args) -> bool:
     return version in ("latest", "next", "") or not re.match(r"\d", version)
 
 
-NPM_NAME = re.compile(r"(?:@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*")
-PYPI_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+# A whole package spec, name plus an optional version/tag/range. No ':' '/' '@' or space after the name, so
+# URLs, file:, github:, npm: aliases and "name @ url" never parse as a registry package.
+NPM_SPEC = re.compile(r"((?:@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*)(?:@[A-Za-z0-9.+_~^<>=*|-]+)?")
+_PEP440 = r"(?:===|==|>=|<=|~=|!=|>|<)[A-Za-z0-9.*+!_-]+"
+PYPI_SPEC = re.compile(rf"([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(?:\[[A-Za-z0-9,._-]+\])?"
+                       rf"(?:{_PEP440}(?:,{_PEP440})*|@[A-Za-z0-9.+_-]+)?")
+# Only flags known to take no value may come before the package; any other flag could take the next word.
+NO_VALUE_FLAGS = {"npx": {"-y", "--yes", "-q", "--quiet"}, "pnpx": {"-y", "--yes", "-q", "--quiet"},
+                  "bunx": {"-y", "--yes", "--bun"}, "uvx": {"-q", "--quiet", "--isolated", "--offline", "--no-cache"},
+                  "pipx": {"-q", "--quiet"}}
+FILE_SUFFIXES = (".tgz", ".tar.gz", ".tar", ".zip", ".whl", ".py")
+REGISTRY_ENV = re.compile(r"(?i)npm_config_(registry|@.*:registry)|uv_(default_)?index(_url)?|uv_extra_index_url|"
+                          r"pip_(extra_)?index_url|pip_find_links|uv_find_links|bun_config_registry")
 
 
-def _package(program: str, args):
+def _package(program: str, args, env=None):
     """Registry identity of what a runner fetches ("npm:@playwright/mcp", "pypi:mcp-server-fetch"), or None.
 
-    Only a plain package from a public registry counts. Local paths, git/URL sources and ambiguous
-    forms (--package, --from) give None: an identity is never guessed from a label.
+    A false identity is worse than none, so this is an allowlist: a known runner, only no-value flags
+    before the spec, a whole spec that parses as a plain public-registry package, and no registry
+    override in the server's env. Anything else gives None. A project .npmrc/pip.conf is not read.
     """
     if program not in RUNNERS or not isinstance(args, list) or not all(isinstance(a, str) for a in args):
         return None
-    if any(a in ("-p", "--package", "--from") or a.startswith(("--package=", "--from=")) for a in args):
+    if isinstance(env, dict) and any(isinstance(k, str) and REGISTRY_ENV.fullmatch(k) for k in env):
         return None
-    words = [a for a in args if not a.startswith("-")]
+    words = list(args)
     if program == "pipx":
         if not words or words[0] != "run":
             return None
         words = words[1:]
+    allowed = NO_VALUE_FLAGS[program]
+    while words and words[0].startswith("-"):
+        flag = words.pop(0)
+        if flag == "--":
+            break
+        if flag not in allowed:
+            return None
     if not words:
         return None
     spec = words[0]
+    if spec.lower().endswith(FILE_SUFFIXES):
+        return None
     if program in ("uvx", "pipx"):
-        name = re.split(r"[\[=<>!~;@ ]", spec, maxsplit=1)[0]
-        if not PYPI_NAME.fullmatch(name) or len(name) > 214:
+        m = PYPI_SPEC.fullmatch(spec)
+        if not m or len(m.group(1)) > 214:
             return None
+        name = m.group(1)
         ident = "pypi:" + re.sub(r"[-_.]+", "-", name).lower()
     else:
-        scoped = spec.startswith("@")
-        body = spec[1:] if scoped else spec
-        name = ("@" if scoped else "") + body.split("@", 1)[0]
-        if not NPM_NAME.fullmatch(name) or len(name) > 214 or (scoped and "/" not in name):
+        m = NPM_SPEC.fullmatch(spec)
+        if not m or len(m.group(1)) > 214:
             return None
+        name = m.group(1)
         ident = "npm:" + name
     return ident if _safe(ident) == ident and not _looks_secret(name) else None
 
@@ -334,7 +355,10 @@ def _scan_mcp_file(client, path, rep):
         args = cfg.get("args")
         if isinstance(cfg.get("command"), dict):
             args = cfg["command"].get("args", args)
-        pkg = None if isinstance(cfg.get("url"), str) else _package(target, args)
+        cmd = cfg.get("command")
+        cmd_path = cmd.get("path") if isinstance(cmd, dict) else cmd
+        one_word = isinstance(cmd_path, str) and len(cmd_path.split()) == 1  # "npx -y x" runs x, whatever args say
+        pkg = _package(target, args, cfg.get("env")) if one_word and not isinstance(cfg.get("url"), str) else None
         rep.add("mcp_server", _safe(name), where, runs=_safe(target), **({"package": pkg} if pkg else {}))
         rep.reach.setdefault(_capability(str(name), args), set()).add(_safe(name))
         if not isinstance(cfg.get("url"), str) and _unpinned(target, args):

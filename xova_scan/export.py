@@ -9,6 +9,7 @@ import re
 
 SOURCE_SYSTEM = "xova-scan"
 MAX_ENTRIES = 25
+MAX_NOTE = 1000  # XOVA's discovery_note limit
 SYSTEM_KINDS = {"mcp_server": "MCP server", "ai_app": "AI app", "ai_cli": "AI command-line tool",
                 "ai_library": "AI library"}
 
@@ -32,13 +33,18 @@ def to_xova(report: dict, *, team: str, added_on: str, machine: str) -> list:
     for (kind, name), wheres in sorted(grouped.items()):
         label = SYSTEM_KINDS[kind]
         where = f"{len(wheres)} projects" if len(wheres) > 1 else wheres[0]
-        note = f"Found by xova-scan {report.get('version', '')} on {added_on}: {label} ({where})."
         pkgs = sorted(packages.get((kind, name), ()))
-        if len(pkgs) == 1:  # two configs with one label running different packages: no single identity to state
-            note += f" Package: {pkgs[0]}."
+        tail = f" Package: {pkgs[0]}." if len(pkgs) == 1 else ""  # one label, two packages: no single identity
         if name in reach_of:
-            note += f" Can reach: {reach_of[name]}."
-        note += " Not reviewed."
+            tail += f" Can reach: {reach_of[name]}."
+        tail += " Not reviewed."
+        head = f"Found by xova-scan {report.get('version', '')} on {added_on}: {label} ("
+        room = MAX_NOTE - len(head) - len(tail) - 2
+        if len(where) > room:  # shorten the location, never the facts after it
+            where = where[:max(room - 3, 0)] + "..."
+        note = f"{head}{where}).{tail}"
+        if len(note) > MAX_NOTE:  # tail alone too long (huge reach label): drop optional facts, keep the honest end
+            note = (f"{head}{where[:20]}...). Not reviewed.")[:MAX_NOTE]
         key = f"{kind}:{name}"
         entries.append({
             "entry_id": f"scan-{machine_id}-{_slug(kind)}-{_slug(name)}-{hashlib.sha256(key.encode()).hexdigest()[:8]}",
@@ -46,7 +52,7 @@ def to_xova(report: dict, *, team: str, added_on: str, machine: str) -> list:
             "tool_name": name,
             "owning_team": team.strip(),
             "added_on": added_on,
-            "discovery_note": note[:1000],
+            "discovery_note": note,
             "status": "under_review",  # found, not reviewed; XOVA requires a lifecycle status
         })
     return [{"source_system": SOURCE_SYSTEM, "entries": entries[i:i + MAX_ENTRIES]}

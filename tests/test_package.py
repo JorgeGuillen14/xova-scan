@@ -41,6 +41,58 @@ class PackageIdentityTests(unittest.TestCase):
         ]:
             self.assertIsNone(_package(program, args), (program, args))
 
+    def test_review_flags_with_values_never_become_the_package(self):
+        for program, args in [
+            ("npx", ["--call", "evil-cmd"]), ("npx", ["--registry", "evil", "x"]), ("npx", ["-yp", "@evil/x", "@playwright/mcp"]),
+            ("bunx", ["--registry", "evil", "@playwright/mcp"]), ("bunx", ["--cwd", "x", "@playwright/mcp"]),
+            ("pnpx", ["--filter", "foo", "@playwright/mcp"]), ("pnpx", ["-C", "foo", "@playwright/mcp"]),
+            ("pnpx", ["--allow-build", "esbuild", "@playwright/mcp"]),
+            ("uvx", ["--with", "evil", "mcp-server-fetch"]), ("uvx", ["-w", "evil", "mcp-server-fetch"]),
+            ("uvx", ["--python", "3.12", "mcp-server-fetch"]), ("uvx", ["--with-requirements", "r.txt", "x"]),
+            ("pipx", ["run", "--spec", "evil", "mcp-server-fetch"]), ("pipx", ["run", "--spec=evil", "mcp-server-fetch"]),
+            ("pipx", ["run", "--python", "3.12", "mcp-server-fetch"]),
+        ]:
+            self.assertIsNone(_package(program, args), (program, args))
+
+    def test_review_non_registry_sources_in_the_version_part(self):
+        for program, args in [
+            ("npx", ["pkg@https://evil/x.tgz"]), ("npx", ["pkg@file:../x"]), ("npx", ["pkg@github:evil/x"]),
+            ("npx", ["pkg@evil/x"]), ("npx", ["evil@npm:@playwright/mcp"]),
+            ("uvx", ["mcp-server-fetch @ https://evil/x.whl"]), ("uvx", ["mcp-server-fetch@https://evil"]),
+            ("npx", ["mcp.tgz"]), ("uvx", ["x.whl"]), ("pipx", ["run", "script.py"]), ("npx", ["x.tar.gz"]),
+        ]:
+            self.assertIsNone(_package(program, args), (program, args))
+        self.assertEqual(_package("npx", ["--", "pkg@^1.2.0"]), "npm:pkg")
+        self.assertEqual(_package("npx", ["chart.js@4"]), "npm:chart.js")
+
+    def test_review_registry_override_in_env_gives_none(self):
+        for key in ["npm_config_registry", "NPM_CONFIG_REGISTRY", "UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_INDEX",
+                    "UV_EXTRA_INDEX_URL", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL"]:
+            self.assertIsNone(_package("npx", ["@playwright/mcp"], env={key: "https://evil.example"}), key)
+        self.assertEqual(_package("npx", ["@playwright/mcp"], env={"DEBUG": "1"}), "npm:@playwright/mcp")
+
+    def test_review_command_string_with_arguments_gives_none(self):
+        with tempfile.TemporaryDirectory() as t:
+            home = Path(t) / "home"
+            cfg = home / ".cursor/mcp.json"
+            cfg.parent.mkdir(parents=True)
+            cfg.write_text(json.dumps({"mcpServers": {
+                "shell": {"command": "npx -y evil-pkg", "args": ["@playwright/mcp"]},
+                "zed": {"command": {"path": "npx -y evil", "args": ["@playwright/mcp"]}},
+                "envreg": {"command": "npx", "args": ["@playwright/mcp"], "env": {"npm_config_registry": "https://e"}}}}))
+            (Path(t) / "Apps").mkdir()
+            r = scan(home=home, apps_dir=Path(t) / "Apps", roots=[])
+        self.assertEqual([f.get("package") for f in r["found"] if f["kind"] == "mcp_server"], [None, None, None])
+
+    def test_review_long_location_never_truncates_the_package(self):
+        for n in range(400, 620, 3):
+            rep = {"version": "0.5.0", "found": [{"kind": "mcp_server", "name": "p", "where": "d/" * n, "runs": "npx",
+                                                  "package": "npm:@playwright/mcp"}]}
+            note = to_xova(rep, team="eng", added_on="2026-11-24", machine="m")[0]["entries"][0]["discovery_note"]
+            self.assertLessEqual(len(note), 1000)
+            self.assertIn(" Package: npm:@playwright/mcp.", note, n)
+            self.assertTrue(note.endswith(" Not reviewed."), n)
+
     def test_secret_shaped_package_is_never_emitted(self):
         self.assertIsNone(_package("npx", ["sk-live-THIS-MUST-NEVER-APPEAR-123"]))
 
