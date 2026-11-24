@@ -110,6 +110,43 @@ def _unpinned(program: str, args) -> bool:
     return version in ("latest", "next", "") or not re.match(r"\d", version)
 
 
+NPM_NAME = re.compile(r"(?:@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*")
+PYPI_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+
+
+def _package(program: str, args):
+    """Registry identity of what a runner fetches ("npm:@playwright/mcp", "pypi:mcp-server-fetch"), or None.
+
+    Only a plain package from a public registry counts. Local paths, git/URL sources and ambiguous
+    forms (--package, --from) give None: an identity is never guessed from a label.
+    """
+    if program not in RUNNERS or not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        return None
+    if any(a in ("-p", "--package", "--from") or a.startswith(("--package=", "--from=")) for a in args):
+        return None
+    words = [a for a in args if not a.startswith("-")]
+    if program == "pipx":
+        if not words or words[0] != "run":
+            return None
+        words = words[1:]
+    if not words:
+        return None
+    spec = words[0]
+    if program in ("uvx", "pipx"):
+        name = re.split(r"[\[=<>!~;@ ]", spec, maxsplit=1)[0]
+        if not PYPI_NAME.fullmatch(name) or len(name) > 214:
+            return None
+        ident = "pypi:" + re.sub(r"[-_.]+", "-", name).lower()
+    else:
+        scoped = spec.startswith("@")
+        body = spec[1:] if scoped else spec
+        name = ("@" if scoped else "") + body.split("@", 1)[0]
+        if not NPM_NAME.fullmatch(name) or len(name) > 214 or (scoped and "/" not in name):
+            return None
+        ident = "npm:" + name
+    return ident if _safe(ident) == ident and not _looks_secret(name) else None
+
+
 class _Unreadable(Exception):
     pass
 
@@ -294,10 +331,11 @@ def _scan_mcp_file(client, path, rep):
             target, secret = _url_target(cfg["url"])
         else:
             target, secret = _command_target(cfg.get("command"), cfg.get("args"))
-        rep.add("mcp_server", _safe(name), where, runs=_safe(target))
         args = cfg.get("args")
         if isinstance(cfg.get("command"), dict):
             args = cfg["command"].get("args", args)
+        pkg = None if isinstance(cfg.get("url"), str) else _package(target, args)
+        rep.add("mcp_server", _safe(name), where, runs=_safe(target), **({"package": pkg} if pkg else {}))
         rep.reach.setdefault(_capability(str(name), args), set()).add(_safe(name))
         if not isinstance(cfg.get("url"), str) and _unpinned(target, args):
             rep.unpinned.add(_safe(name))

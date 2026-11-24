@@ -19,7 +19,7 @@ ALLOWED = REQUIRED | {"source_object_id", "discovery_note"}
 
 def report(n_servers=3):
     found = [{"kind": "mcp_server", "name": f"srv{i}", "where": "Cursor (/h/.cursor/mcp.json)", "status": "Not reviewed",
-              "runs": "npx"} for i in range(n_servers)]
+              "runs": "npx", **({"package": "npm:@playwright/mcp"} if i == 0 else {})} for i in range(n_servers)]
     found += [{"kind": "ai_app", "name": "Claude", "where": "/Applications/Claude.app", "status": "Not reviewed"},
               {"kind": "ai_cli", "name": "codex", "where": "/opt/homebrew/bin/codex", "status": "Not reviewed"},
               {"kind": "ai_library", "name": "openai", "where": "/h/code/a/package.json", "status": "Not reviewed"},

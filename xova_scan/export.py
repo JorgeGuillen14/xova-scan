@@ -22,15 +22,20 @@ def to_xova(report: dict, *, team: str, added_on: str, machine: str) -> list:
         raise ValueError("--team is required: XOVA needs the owning department, and xova-scan never guesses one")
     machine_id = hashlib.sha256(machine.encode()).hexdigest()[:12]
     reach_of = {name: cap for cap, names in report.get("reach", {}).items() for name in names}
-    grouped = {}
+    grouped, packages = {}, {}
     for f in report.get("found", []):
         if f["kind"] in SYSTEM_KINDS:
             grouped.setdefault((f["kind"], f["name"]), []).append(f["where"])
+            if f.get("package"):
+                packages.setdefault((f["kind"], f["name"]), set()).add(f["package"])
     entries = []
     for (kind, name), wheres in sorted(grouped.items()):
         label = SYSTEM_KINDS[kind]
         where = f"{len(wheres)} projects" if len(wheres) > 1 else wheres[0]
         note = f"Found by xova-scan {report.get('version', '')} on {added_on}: {label} ({where})."
+        pkgs = sorted(packages.get((kind, name), ()))
+        if len(pkgs) == 1:  # two configs with one label running different packages: no single identity to state
+            note += f" Package: {pkgs[0]}."
         if name in reach_of:
             note += f" Can reach: {reach_of[name]}."
         note += " Not reviewed."
