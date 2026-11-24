@@ -93,6 +93,32 @@ class PackageIdentityTests(unittest.TestCase):
             self.assertIn(" Package: npm:@playwright/mcp.", note, n)
             self.assertTrue(note.endswith(" Not reviewed."), n)
 
+    def test_rereview_local_path_versions_config_files_and_zed_env(self):
+        for program, args in [("npx", ["-y", "pkg@.."]), ("npx", ["pkg@."]), ("npx", ["@s/pkg@.."]), ("uvx", ["pkg@."])]:
+            self.assertIsNone(_package(program, args), (program, args))
+        for key in ["npm_config_userconfig", "NPM_CONFIG_GLOBALCONFIG", "UV_CONFIG_FILE", "PIP_CONFIG_FILE", "UV_OVERRIDE"]:
+            self.assertIsNone(_package("npx", ["@playwright/mcp"], env={key: "/x"}), key)
+        with tempfile.TemporaryDirectory() as t:
+            home = Path(t) / "home"
+            zed = home / ".config/zed/settings.json"
+            zed.parent.mkdir(parents=True)
+            zed.write_text(json.dumps({"context_servers": {"z": {"command": {
+                "path": "npx", "args": ["-y", "@playwright/mcp"], "env": {"npm_config_registry": "https://evil"}}}}}))
+            vs = home / ".cursor/mcp.json"
+            vs.parent.mkdir(parents=True)
+            vs.write_text(json.dumps({"mcpServers": {"v": {"command": "npx", "args": ["@playwright/mcp"], "envFile": "/x/.env"}}}))
+            (Path(t) / "Apps").mkdir()
+            r = scan(home=home, apps_dir=Path(t) / "Apps", roots=[])
+        got = {f["name"]: f.get("package") for f in r["found"] if f["kind"] == "mcp_server"}
+        self.assertEqual(got, {"z": None, "v": None})
+
+    def test_rereview_huge_version_keeps_not_reviewed(self):
+        rep = {"version": "v" * 990, "found": [{"kind": "mcp_server", "name": "p", "where": "w", "runs": "npx",
+                                               "package": "npm:@playwright/mcp"}]}
+        note = to_xova(rep, team="eng", added_on="2026-11-24", machine="m")[0]["entries"][0]["discovery_note"]
+        self.assertLessEqual(len(note), 1000)
+        self.assertTrue(note.endswith(" Not reviewed."))
+
     def test_secret_shaped_package_is_never_emitted(self):
         self.assertIsNone(_package("npx", ["sk-live-THIS-MUST-NEVER-APPEAR-123"]))
 

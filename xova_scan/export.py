@@ -38,13 +38,13 @@ def to_xova(report: dict, *, team: str, added_on: str, machine: str) -> list:
         if name in reach_of:
             tail += f" Can reach: {reach_of[name]}."
         tail += " Not reviewed."
-        head = f"Found by xova-scan {report.get('version', '')} on {added_on}: {label} ("
+        head = f"Found by xova-scan {str(report.get('version', ''))[:40]} on {added_on}: {label} ("
         room = MAX_NOTE - len(head) - len(tail) - 2
         if len(where) > room:  # shorten the location, never the facts after it
             where = where[:max(room - 3, 0)] + "..."
         note = f"{head}{where}).{tail}"
         if len(note) > MAX_NOTE:  # tail alone too long (huge reach label): drop optional facts, keep the honest end
-            note = (f"{head}{where[:20]}...). Not reviewed.")[:MAX_NOTE]
+            note = f"{head[:MAX_NOTE - 40]}{where[:20]}...). Not reviewed."
         key = f"{kind}:{name}"
         entries.append({
             "entry_id": f"scan-{machine_id}-{_slug(kind)}-{_slug(name)}-{hashlib.sha256(key.encode()).hexdigest()[:8]}",

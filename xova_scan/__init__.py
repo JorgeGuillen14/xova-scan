@@ -112,17 +112,18 @@ def _unpinned(program: str, args) -> bool:
 
 # A whole package spec, name plus an optional version/tag/range. No ':' '/' '@' or space after the name, so
 # URLs, file:, github:, npm: aliases and "name @ url" never parse as a registry package.
-NPM_SPEC = re.compile(r"((?:@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*)(?:@[A-Za-z0-9.+_~^<>=*|-]+)?")
+NPM_SPEC = re.compile(r"((?:@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*)(?:@[A-Za-z0-9^~<>=*][A-Za-z0-9.+_~^<>=*|-]*)?")
 _PEP440 = r"(?:===|==|>=|<=|~=|!=|>|<)[A-Za-z0-9.*+!_-]+"
 PYPI_SPEC = re.compile(rf"([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(?:\[[A-Za-z0-9,._-]+\])?"
-                       rf"(?:{_PEP440}(?:,{_PEP440})*|@[A-Za-z0-9.+_-]+)?")
+                       rf"(?:{_PEP440}(?:,{_PEP440})*|@[A-Za-z0-9][A-Za-z0-9.+_-]*)?")
 # Only flags known to take no value may come before the package; any other flag could take the next word.
 NO_VALUE_FLAGS = {"npx": {"-y", "--yes", "-q", "--quiet"}, "pnpx": {"-y", "--yes", "-q", "--quiet"},
                   "bunx": {"-y", "--yes", "--bun"}, "uvx": {"-q", "--quiet", "--isolated", "--offline", "--no-cache"},
                   "pipx": {"-q", "--quiet"}}
 FILE_SUFFIXES = (".tgz", ".tar.gz", ".tar", ".zip", ".whl", ".py")
 REGISTRY_ENV = re.compile(r"(?i)npm_config_(registry|@.*:registry)|uv_(default_)?index(_url)?|uv_extra_index_url|"
-                          r"pip_(extra_)?index_url|pip_find_links|uv_find_links|bun_config_registry")
+                          r"pip_(extra_)?index_url|pip_find_links|uv_find_links|bun_config_registry|"
+                          r"npm_config_(user|global)config|uv_config_file|pip_config_file|uv_override")
 
 
 def _package(program: str, args, env=None):
@@ -358,7 +359,9 @@ def _scan_mcp_file(client, path, rep):
         cmd = cfg.get("command")
         cmd_path = cmd.get("path") if isinstance(cmd, dict) else cmd
         one_word = isinstance(cmd_path, str) and len(cmd_path.split()) == 1  # "npx -y x" runs x, whatever args say
-        pkg = _package(target, args, cfg.get("env")) if one_word and not isinstance(cfg.get("url"), str) else None
+        env = cmd.get("env", cfg.get("env")) if isinstance(cmd, dict) else cfg.get("env")  # Zed keeps env in command
+        plain = one_word and not isinstance(cfg.get("url"), str) and "envFile" not in cfg  # an env file can set a registry
+        pkg = _package(target, args, env) if plain else None
         rep.add("mcp_server", _safe(name), where, runs=_safe(target), **({"package": pkg} if pkg else {}))
         rep.reach.setdefault(_capability(str(name), args), set()).add(_safe(name))
         if not isinstance(cfg.get("url"), str) and _unpinned(target, args):
