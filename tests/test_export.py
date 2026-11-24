@@ -13,7 +13,7 @@ from xova_scan.cli import main
 from xova_scan.export import to_xova
 
 ENTRY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,159}")
-REQUIRED = {"entry_id", "tool_name", "owning_team", "added_on"}
+REQUIRED = {"entry_id", "tool_name", "owning_team", "added_on", "status"}
 ALLOWED = REQUIRED | {"source_object_id", "discovery_note"}
 
 
@@ -46,6 +46,8 @@ class ExportTests(unittest.TestCase):
             self.assertTrue(REQUIRED <= set(e) <= ALLOWED, e)
             self.assertTrue(ENTRY_ID.fullmatch(e["entry_id"]))
             self.assertEqual(e["owning_team"], "engineering")
+            # XOVA requires a lifecycle status; found-but-unreviewed is under_review (never active/approved)
+            self.assertEqual(e["status"], "under_review")
         db = next(e for e in doc["entries"] if e["tool_name"] == "srv0")
         self.assertIn("databases", db["discovery_note"])
         lib = next(e for e in doc["entries"] if e["tool_name"] == "openai")
@@ -53,7 +55,7 @@ class ExportTests(unittest.TestCase):
 
     def test_never_claims_approval_or_ownership(self):
         for e in self.docs()[0]["entries"]:
-            for field in ("sanctioned", "business_owner", "sponsor", "steward", "status", "assessment", "entity_state"):
+            for field in ("sanctioned", "business_owner", "sponsor", "steward", "assessment", "entity_state"):
                 self.assertNotIn(field, e)
 
     def test_splits_into_files_of_25(self):

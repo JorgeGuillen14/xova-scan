@@ -13,7 +13,7 @@ import unicodedata
 from . import CAPABILITIES
 from .export import MAX_ENTRIES, SOURCE_SYSTEM, SYSTEM_KINDS, _slug
 
-_FIELDS = {"entry_id", "source_object_id", "tool_name", "owning_team", "added_on", "discovery_note"}
+_FIELDS = {"entry_id", "source_object_id", "tool_name", "owning_team", "added_on", "discovery_note", "status"}
 _MACHINE = re.compile(r"[0-9a-f]{12}")
 # Only the scanner's own reach labels are carried over; any other text in a note is dropped or refused.
 REACH_LABELS = sorted({label for label, _ in CAPABILITIES} | {"other tools"})
@@ -52,6 +52,8 @@ def _rows(docs):
             kind, sep2, name = key.partition(":")
             if not (sep and sep2 and _MACHINE.fullmatch(machine) and kind in SYSTEM_KINDS and name == e["tool_name"]):
                 raise ValueError(f"entry {e['entry_id'][:80]!r} has an identity xova-scan did not write")
+            if e["status"] != "under_review":
+                raise ValueError(f"entry {e['entry_id'][:80]!r} claims a status other than under_review")
             if not _real_date(e["added_on"]):
                 raise ValueError(f"entry {e['entry_id'][:80]!r} has a bad date")
             _clean(name, "tool_name", MAX_NAME)
@@ -102,6 +104,7 @@ def merge(machine_exports, *, team=None):
             "owning_team": team if team is not None else next(iter(s["teams"])),
             "added_on": latest,
             "discovery_note": note,
+            "status": "under_review",
         })
     return [{"source_system": SOURCE_SYSTEM, "entries": entries[i:i + MAX_ENTRIES]}
             for i in range(0, len(entries), MAX_ENTRIES)]

@@ -71,7 +71,8 @@ class MergeTests(unittest.TestCase):
     def test_never_claims_approval_or_ownership(self):
         for e in entries(merge([machine_docs("mac-a", ["pg"])])):
             self.assertEqual(set(e), {"entry_id", "source_object_id", "tool_name", "owning_team", "added_on",
-                                      "discovery_note"})
+                                      "discovery_note", "status"})
+            self.assertEqual(e["status"], "under_review")
 
     def test_splits_into_files_of_25(self):
         docs = merge([machine_docs("mac-a", [f"s{i}" for i in range(30)]),
@@ -86,6 +87,7 @@ class MergeTests(unittest.TestCase):
             "not a list": {**good, "entries": {}},
             "approval smuggled": {**good, "entries": [{**good["entries"][0], "sanctioned": True}]},
             "status smuggled": {**good, "entries": [{**good["entries"][0], "status": "approved"}]},
+            "active claimed": {**good, "entries": [{**good["entries"][0], "status": "active"}]},
             "bad identity": {**good, "entries": [{**good["entries"][0], "source_object_id": "nocolon"}]},
             "unknown kind": {**good, "entries": [{**good["entries"][0], "source_object_id": "abcdef012345:api_key:K"}]},
             "name mismatch": {**good, "entries": [{**good["entries"][0], "tool_name": "other"}]},

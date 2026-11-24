@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xova-scan"
-version = "0.4.0"
+version = "0.4.1"
 description = "Find the AI on your machine (MCP servers, AI apps, AI libraries, AI keys) and check it against your rules. Local only."
 readme = "README.md"
 license = "Apache-2.0"

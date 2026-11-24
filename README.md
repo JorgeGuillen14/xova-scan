@@ -36,7 +36,7 @@ This is the scanner's real output on a demo machine built by [`examples/demo_mac
 
 <!-- demo-output-start -->
 ```
-xova-scan 0.4.0: 9 AI items on this machine, 5 problems
+xova-scan 0.4.1: 9 AI items on this machine, 5 problems
 
 What your AI can reach
   - databases: supabase

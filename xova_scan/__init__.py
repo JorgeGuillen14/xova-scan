@@ -16,7 +16,7 @@ import tomllib
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 NOTE = ("Local scan only. Nothing left this machine. Secret values were never read into the report. "
         "Finding nothing does not prove there is no AI here.")

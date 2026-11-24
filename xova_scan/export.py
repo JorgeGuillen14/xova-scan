@@ -42,6 +42,7 @@ def to_xova(report: dict, *, team: str, added_on: str, machine: str) -> list:
             "owning_team": team.strip(),
             "added_on": added_on,
             "discovery_note": note[:1000],
+            "status": "under_review",  # found, not reviewed; XOVA requires a lifecycle status
         })
     return [{"source_system": SOURCE_SYSTEM, "entries": entries[i:i + MAX_ENTRIES]}
             for i in range(0, len(entries), MAX_ENTRIES)] or [{"source_system": SOURCE_SYSTEM, "entries": []}]
