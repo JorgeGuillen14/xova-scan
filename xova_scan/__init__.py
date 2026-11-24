@@ -123,7 +123,7 @@ NO_VALUE_FLAGS = {"npx": {"-y", "--yes", "-q", "--quiet"}, "pnpx": {"-y", "--yes
 FILE_SUFFIXES = (".tgz", ".tar.gz", ".tar", ".zip", ".whl", ".py")
 REGISTRY_ENV = re.compile(r"(?i)npm_config_(registry|@.*:registry)|uv_(default_)?index(_url)?|uv_extra_index_url|"
                           r"pip_(extra_)?index_url|pip_find_links|uv_find_links|bun_config_registry|"
-                          r"npm_config_(user|global)config|uv_config_file|pip_config_file|uv_override")
+                          r"npm_config_(user|global)config|uv_config_file|pip_config_file|uv_override|uv_constraint")
 
 
 def _package(program: str, args, env=None):

@@ -97,6 +97,7 @@ Local scan only. Nothing left this machine. Secret values were never read into t
 | **What your AI did** | Read from the agents' own local logs (Claude Code, Codex, Claude Desktop): counts only, never your prompts or file contents. |
 | **Fix first** | The three most serious problems, worst first. |
 | **Inventory** | MCP servers, AI apps, AI command-line tools, AI libraries in your projects, AI keys (names only), cloud accounts set up here. |
+| **Package (`--json`)** | For an MCP server started by npx, bunx, pnpx, uvx or `pipx run`, the public registry package its config asks for (for example `npm:@playwright/mcp`). Left out whenever it is not a plain registry package. A registry changed outside the server's own config (`.npmrc`, `pip.conf`, `uv.toml`, the machine's environment) is not detected. |
 | **All rule findings** | Every problem, grouped by rule, with where it is. |
 
 ### The rules it checks

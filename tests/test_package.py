@@ -96,7 +96,7 @@ class PackageIdentityTests(unittest.TestCase):
     def test_rereview_local_path_versions_config_files_and_zed_env(self):
         for program, args in [("npx", ["-y", "pkg@.."]), ("npx", ["pkg@."]), ("npx", ["@s/pkg@.."]), ("uvx", ["pkg@."])]:
             self.assertIsNone(_package(program, args), (program, args))
-        for key in ["npm_config_userconfig", "NPM_CONFIG_GLOBALCONFIG", "UV_CONFIG_FILE", "PIP_CONFIG_FILE", "UV_OVERRIDE"]:
+        for key in ["npm_config_userconfig", "NPM_CONFIG_GLOBALCONFIG", "UV_CONFIG_FILE", "PIP_CONFIG_FILE", "UV_OVERRIDE", "UV_CONSTRAINT"]:
             self.assertIsNone(_package("npx", ["@playwright/mcp"], env={key: "/x"}), key)
         with tempfile.TemporaryDirectory() as t:
             home = Path(t) / "home"
